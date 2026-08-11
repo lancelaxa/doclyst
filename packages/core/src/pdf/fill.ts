@@ -5,6 +5,7 @@ import {
   PDFOptionList,
   PDFRadioGroup,
   PDFTextField,
+  type PDFFont,
 } from 'pdf-lib';
 import { DoclystError, safeErrorSummary } from '../errors.js';
 import type { PlaceholderResolver } from '../docx/wordxml.js';
@@ -40,7 +41,36 @@ export interface PdfFillOptions {
    * and timestamps otherwise travel to every recipient.
    */
   readonly scrubMetadata?: boolean;
+  /**
+   * What to do when a value is too long for the box the template gives it.
+   *
+   * A PDF form field clips whatever does not fit, so the default behaviour of
+   * the format is to publish a truncated address or a truncated name with no
+   * indication that anything is missing. That is the worst possible outcome on
+   * a document that is about to be signed, so Doclyst never simply allows it.
+   *
+   * - `shrink` (default) reduces that field's font size until the value fits,
+   *   down to {@link minFontSizePt}, and reports which fields it had to shrink.
+   * - `error` fails the record instead, naming the field.
+   * - `ignore` restores the format's own behaviour: the value is clipped.
+   *   Present for templates where a field is deliberately over-provisioned,
+   *   but it means accepting silent truncation.
+   */
+  readonly overflow?: OverflowPolicy;
+  /**
+   * Smallest font size, in points, that `shrink` may use. Below this a value
+   * is unreadable, so shrinking stops being a fix and the record fails.
+   */
+  readonly minFontSizePt?: number;
 }
+
+/** How to handle a value that does not fit its form field. */
+export type OverflowPolicy = 'shrink' | 'error' | 'ignore';
+
+const DEFAULT_MIN_FONT_SIZE_PT = 6;
+
+/** Largest size auto-sizing fields are considered at, matching pdf-lib. */
+const AUTO_SIZE_CEILING_PT = 12;
 
 /** Normalise a form field name to the placeholder key it represents. */
 export function fieldNameToKey(name: string): string {
@@ -86,6 +116,12 @@ export interface PdfFillResult {
   readonly bytes: Uint8Array;
   /** Number of form fields that received a value. */
   readonly replaced: number;
+  /**
+   * Fields whose font size had to be reduced for the value to fit. Reported so
+   * an operator can widen the template rather than ship documents that read
+   * unevenly. Field names only — never values.
+   */
+  readonly shrunkFields: readonly string[];
 }
 
 /** Fill a PDF template's form fields, resolving each through `resolve`. */
@@ -106,6 +142,20 @@ export async function fillPdf(
     );
   }
 
+  // The font pdf-lib will draw the fields with, so an overflow check measures
+  // what the reader actually sees.
+  let defaultFont: PDFFont | undefined;
+  try {
+    defaultFont = form.getDefaultFont();
+  } catch {
+    // A template whose font cannot be resolved is filled without the fit
+    // check rather than refused; see fitTextField.
+  }
+
+  const overflow = options.overflow ?? 'shrink';
+  const minFontSize = options.minFontSizePt ?? DEFAULT_MIN_FONT_SIZE_PT;
+  const shrunkFields: string[] = [];
+
   let replaced = 0;
   for (const field of fields) {
     const rawName = field.getName();
@@ -117,6 +167,10 @@ export async function fillPdf(
     if (value === `{{${key}}}`) continue;
 
     applyFieldValue(field, value, key);
+    if (field instanceof PDFTextField) {
+      const shrunk = fitTextField(field, value, key, defaultFont, overflow, minFontSize);
+      if (shrunk !== undefined) shrunkFields.push(shrunk);
+    }
     replaced += 1;
   }
 
@@ -140,7 +194,7 @@ export async function fillPdf(
   // for a second pass would be wasted work. When the caller keeps the fields
   // interactive, appearances must be regenerated or viewers show empty boxes.
   const bytes = await doc.save({ updateFieldAppearances: !flatten });
-  return { bytes, replaced };
+  return { bytes, replaced, shrunkFields };
 }
 
 /** Set one field's value according to its widget type. */
@@ -179,6 +233,127 @@ function applyFieldValue(field: unknown, value: string, key: string): void {
     `The PDF form field "${key}" is of a type Doclyst cannot fill.`,
     { field: key },
   );
+}
+
+/**
+ * Make a text value fit the box the template gives it.
+ *
+ * A PDF form field is a fixed rectangle with a clip path, so anything wider is
+ * drawn and then hidden: the file contains the full address, the reader sees
+ * half of it. Nothing in the format signals this, which is why it is checked
+ * here rather than left to whoever opens the document.
+ *
+ * The measurement uses the same font pdf-lib will draw with, so it reflects
+ * the real appearance rather than an estimate. Where it cannot be exact — a
+ * template using a font Doclyst cannot resolve — it declines to guess and
+ * leaves the value alone, because a false failure on a correct document is its
+ * own kind of harm.
+ */
+function fitTextField(
+  field: PDFTextField,
+  value: string,
+  key: string,
+  font: PDFFont | undefined,
+  policy: OverflowPolicy,
+  minSize: number,
+): string | undefined {
+  if (policy === 'ignore' || value === '' || font === undefined) return undefined;
+
+  const widget = field.acroField.getWidgets()[0];
+  if (widget === undefined) return undefined;
+
+  const rectangle = widget.getRectangle();
+  // pdf-lib insets the drawable area by the border, and leaves a point of
+  // padding. Matching that keeps the check aligned with what is actually drawn.
+  const border = widget.getBorderStyle()?.getWidth() ?? 0;
+  const inset = border + 1;
+  const width = rectangle.width - inset * 2;
+  const height = rectangle.height - inset * 2;
+  if (width <= 0 || height <= 0) return undefined;
+
+  const declared = readFontSize(field);
+  // Size 0 means the field auto-sizes; pdf-lib then picks a size itself, which
+  // it will happily take below legibility, so it is checked the same way.
+  const startSize = declared === undefined || declared === 0 ? AUTO_SIZE_CEILING_PT : declared;
+  const multiline = field.isMultiline();
+
+  if (fits(font, value, startSize, width, height, multiline)) return undefined;
+
+  if (policy === 'error') {
+    throw new DoclystError(
+      'INVALID_DATA',
+      `The value for "${key}" is too long for that field in the PDF template, and a PDF form field hides whatever does not fit. Widen the field, allow more lines, or shorten the value.`,
+      { field: key },
+    );
+  }
+
+  // Width scales linearly with size, so one step lands close; the loop then
+  // settles it, and covers the multiline case where wrapping changes too.
+  let size = Math.min(startSize, Math.floor(startSize * 10) / 10);
+  while (size >= minSize) {
+    if (fits(font, value, size, width, height, multiline)) {
+      field.setFontSize(size);
+      return key;
+    }
+    size = Math.round((size - 0.5) * 10) / 10;
+  }
+
+  throw new DoclystError(
+    'INVALID_DATA',
+    `The value for "${key}" cannot be made to fit that field in the PDF template without shrinking it below ${minSize}pt, which would be unreadable. Widen the field, allow more lines, or shorten the value.`,
+    { field: key },
+  );
+}
+
+/** Whether a value fits a box at a given size, wrapping if the field allows. */
+function fits(
+  font: PDFFont,
+  value: string,
+  size: number,
+  width: number,
+  height: number,
+  multiline: boolean,
+): boolean {
+  const lineHeight = font.heightAtSize(size);
+
+  if (!multiline) {
+    const singleLine = value.replace(/[\r\n]+/g, ' ');
+    return font.widthOfTextAtSize(singleLine, size) <= width && lineHeight <= height;
+  }
+
+  let lines = 0;
+  for (const paragraph of value.split(/\r?\n/)) {
+    lines += countWrappedLines(font, paragraph, size, width);
+  }
+  return lines * lineHeight <= height;
+}
+
+/** How many lines a paragraph takes when wrapped to a width. */
+function countWrappedLines(font: PDFFont, text: string, size: number, width: number): number {
+  const words = text.split(/\s+/).filter((word) => word !== '');
+  if (words.length === 0) return 1;
+
+  let lines = 1;
+  let current = '';
+  for (const word of words) {
+    const candidate = current === '' ? word : `${current} ${word}`;
+    if (font.widthOfTextAtSize(candidate, size) <= width) {
+      current = candidate;
+      continue;
+    }
+    // A single word wider than the box will overflow whatever we do; counting
+    // it as its own line lets the caller shrink until it stops doing so.
+    lines += 1;
+    current = word;
+  }
+  return lines;
+}
+
+/** The font size a field's default appearance asks for, if it states one. */
+function readFontSize(field: PDFTextField): number | undefined {
+  const appearance = field.acroField.getDefaultAppearance() ?? '';
+  const size = /\/[^\s/]+\s+([\d.]+)\s+Tf/.exec(appearance)?.[1];
+  return size === undefined ? undefined : Number.parseFloat(size);
 }
 
 /**

@@ -87,6 +87,7 @@ export {
   readPdfFields,
   fieldNameToKey,
   type PdfFillOptions,
+  type OverflowPolicy,
   type PdfFillResult,
 } from './pdf/fill.js';
 

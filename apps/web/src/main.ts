@@ -445,7 +445,7 @@ function showStreamResult(
     nodes.push(warning(`No column matched: ${summary.unmatchedFields.join(', ')}`));
   }
 
-  nodes.push(...unsupportedNotice(summary.unsupported));
+  nodes.push(...unsupportedNotice(summary.unsupported), ...shrunkNotice(summary.shrunkFields));
 
   if (failures.length > 0) {
     const list = el('ul', { className: 'failure-list' });
@@ -503,7 +503,7 @@ function showResults(result: BatchResult): void {
     }),
   );
 
-  nodes.push(...unsupportedNotice(result.unsupported));
+  nodes.push(...unsupportedNotice(result.unsupported), ...shrunkNotice(result.shrunkFields));
 
   if (result.documents.length > 0) {
     const totalBytes = result.documents.reduce((sum, document) => sum + document.bytes.length, 0);
@@ -555,6 +555,16 @@ function showResults(result: BatchResult): void {
   }
 
   replaceChildren(results, ...nodes);
+}
+
+/** Name the PDF fields the template gave too little room. */
+function shrunkNotice(fields: readonly string[]): Node[] {
+  if (fields.length === 0) return [];
+  return [
+    warning(
+      `The text was shrunk to fit these form fields: ${fields.join(', ')}. The documents are complete, but widening those fields in the template will make them read evenly.`,
+    ),
+  ];
 }
 
 /** Repeat, on the finished batch, what the template could not carry into PDF. */

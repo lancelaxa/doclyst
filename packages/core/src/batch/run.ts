@@ -96,6 +96,11 @@ export interface BatchResult {
    * as tables or images. Empty unless a DOCX template produced PDF.
    */
   readonly unsupported: readonly string[];
+  /**
+   * PDF form fields whose text had to be shrunk to fit the box the template
+   * gives them. Field names only, never values.
+   */
+  readonly shrunkFields: readonly string[];
   /** Template fields with no matching column, as normalized keys. */
   readonly unmatchedFields: readonly string[];
   readonly warnings: readonly FilenameWarning[];
@@ -115,6 +120,11 @@ export interface BatchSummary {
    * as tables or images. Empty unless a DOCX template produced PDF.
    */
   readonly unsupported: readonly string[];
+  /**
+   * PDF form fields whose text had to be shrunk to fit the box the template
+   * gives them. Field names only, never values.
+   */
+  readonly shrunkFields: readonly string[];
   /** Template fields with no matching column, as normalized keys. */
   readonly unmatchedFields: readonly string[];
   readonly warnings: readonly FilenameWarning[];
@@ -140,6 +150,7 @@ export async function* streamBatch(
 ): AsyncGenerator<BatchEvent, BatchSummary, void> {
   const takenNames = new Set<string>();
   const unmatched = new Set<string>();
+  const shrunk = new Set<string>();
   let generated = 0;
   let failed = 0;
 
@@ -187,7 +198,11 @@ export async function* streamBatch(
       } else if (prepared !== undefined) {
         bytes = fillPreparedDocx(prepared, resolve).bytes;
       } else {
-        bytes = (await fillPdf(template.bytes, resolve, options.pdf ?? {})).bytes;
+        const filled = await fillPdf(template.bytes, resolve, options.pdf ?? {});
+        bytes = filled.bytes;
+        // Which fields were tight is a property of the template, not the row,
+        // so it is collected once for the batch rather than repeated per record.
+        for (const field of filled.shrunkFields) shrunk.add(field);
       }
 
       for (const key of resolver.missingKeys) unmatched.add(key);
@@ -217,6 +232,7 @@ export async function* streamBatch(
     generated,
     failed,
     unsupported,
+    shrunkFields: [...shrunk],
     unmatchedFields: [...unmatched].map(normalizeKey),
     warnings,
   };
@@ -249,6 +265,7 @@ export async function runBatch(
     documents,
     failures,
     unsupported: next.value.unsupported,
+    shrunkFields: next.value.shrunkFields,
     unmatchedFields: next.value.unmatchedFields,
     warnings: next.value.warnings,
   };

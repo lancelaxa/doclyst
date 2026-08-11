@@ -146,6 +146,15 @@ export async function fillCommand(args: ParsedArgs, ctx: CommandContext): Promis
     ctx.error(`Warning: ${warning.message}`);
   }
 
+  // The template gave these fields less room than the data needs. The output
+  // is complete and legible, but it will read unevenly, and the fix belongs in
+  // the template rather than in every future run.
+  if (result.shrunkFields.length > 0) {
+    ctx.error(
+      `Warning: the text was shrunk to fit these PDF form fields: ${result.shrunkFields.join(', ')}. Widen them in the template for an even result.`,
+    );
+  }
+
   // Worth saying loudly: a table dropped from a contract is the kind of thing
   // nobody notices until after it has been sent.
   if (result.unsupported.length > 0) {

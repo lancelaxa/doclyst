@@ -208,3 +208,125 @@ describe('fillPdf', () => {
     });
   });
 });
+
+/**
+ * Values that do not fit the box the template gives them.
+ *
+ * A PDF form field clips its overflow, so the format's own behaviour is to
+ * publish a truncated address with nothing to say so. On a document about to
+ * be signed that is the worst available outcome, and these tests pin the
+ * behaviour that replaces it.
+ */
+describe('a value too long for its field', () => {
+  const LONG = 'Blk 512 Ang Mo Kio Avenue 8, #14-233, Singapore 560512';
+
+  /** The size each drawn string was actually set in. */
+  async function drawnAt(bytes: Uint8Array): Promise<{ size: number; text: string }[]> {
+    const { unzlibSync } = await import('fflate');
+    const raw = Buffer.from(bytes);
+    const streams: string[] = [];
+    let cursor = 0;
+    for (;;) {
+      const start = raw.indexOf('stream', cursor);
+      if (start < 0) break;
+      let begin = start + 'stream'.length;
+      if (raw[begin] === 0x0d) begin += 1;
+      if (raw[begin] === 0x0a) begin += 1;
+      const end = raw.indexOf('endstream', begin);
+      if (end < 0) break;
+      try {
+        streams.push(Buffer.from(unzlibSync(raw.subarray(begin, end))).toString('latin1'));
+      } catch {
+        // Not a compressed stream.
+      }
+      cursor = end + 'endstream'.length;
+    }
+
+    const drawn: { size: number; text: string }[] = [];
+    for (const stream of streams) {
+      let size = 0;
+      const token = /\/[^\s/]+\s+([\d.]+)\s+Tf|\(((?:\\.|[^()\\])*)\)\s*Tj|<([0-9A-Fa-f]*)>\s*Tj/g;
+      let match: RegExpExecArray | null;
+      while ((match = token.exec(stream)) !== null) {
+        if (match[1] !== undefined) {
+          size = Number.parseFloat(match[1]);
+          continue;
+        }
+        const text =
+          match[2] !== undefined ? match[2] : Buffer.from(match[3] ?? '', 'hex').toString('latin1');
+        if (text.trim() !== '') drawn.push({ size, text });
+      }
+    }
+    return drawn;
+  }
+
+  it('shrinks the text to fit rather than letting the reader see half an address', async () => {
+    const template = await buildPdfForm([{ name: 'ADDRESS', width: 260 }]);
+    const result = await fillPdf(template, () => LONG, {});
+
+    expect(result.shrunkFields).toEqual(['ADDRESS']);
+    const drawn = await drawnAt(result.bytes);
+    expect(drawn.map((d) => d.text).join('')).toBe(LONG);
+
+    // Shrunk from the size the template asked for, and now inside the box.
+    const { PDFDocument, StandardFonts } = await import('pdf-lib');
+    const measuring = await PDFDocument.create();
+    const helvetica = await measuring.embedFont(StandardFonts.Helvetica);
+    const size = drawn[0]!.size;
+    expect(helvetica.widthOfTextAtSize(LONG, size)).toBeLessThanOrEqual(260);
+  });
+
+  it('leaves a value that already fits exactly as the template set it', async () => {
+    const template = await buildPdfForm([{ name: 'ADDRESS', width: 260 }]);
+    const result = await fillPdf(template, () => 'Singapore', {});
+    expect(result.shrunkFields).toEqual([]);
+  });
+
+  it('wraps instead of shrinking when the field allows more than one line', async () => {
+    const template = await buildPdfForm([
+      { name: 'ADDRESS', width: 160, height: 60, multiline: true },
+    ]);
+    const result = await fillPdf(template, () => LONG, {});
+    const drawn = await drawnAt(result.bytes);
+
+    expect(drawn.length).toBeGreaterThan(1);
+    expect(drawn.map((d) => d.text).join(' ')).toBe(LONG);
+  });
+
+  it('fails the record when it cannot fit legibly, rather than truncating', async () => {
+    // Below roughly 6pt the value is present but unreadable, which is no more
+    // use on a contract than a clipped one.
+    const template = await buildPdfForm([{ name: 'ADDRESS', width: 40, height: 12 }]);
+    await expect(fillPdf(template, () => LONG, {})).rejects.toThrow(/unreadable|too long/);
+  });
+
+  it('names the field but never quotes the value it could not fit', async () => {
+    const template = await buildPdfForm([{ name: 'ADDRESS', width: 40, height: 12 }]);
+    const error = await fillPdf(template, () => LONG, {}).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DoclystError);
+    expect((error as DoclystError).field).toBe('ADDRESS');
+    expect((error as DoclystError).message).not.toContain('Ang Mo Kio');
+    expect((error as DoclystError).message).not.toContain('560512');
+  });
+
+  it('fails immediately under the error policy, without shrinking anything', async () => {
+    const template = await buildPdfForm([{ name: 'ADDRESS', width: 260 }]);
+    await expect(fillPdf(template, () => LONG, { overflow: 'error' })).rejects.toThrow(
+      /too long for that field/,
+    );
+  });
+
+  it('restores the format"s own clipping under the ignore policy', async () => {
+    const template = await buildPdfForm([{ name: 'ADDRESS', width: 260 }]);
+    const result = await fillPdf(template, () => LONG, { overflow: 'ignore' });
+    expect(result.shrunkFields).toEqual([]);
+  });
+
+  it('respects a caller"s legibility floor', async () => {
+    const template = await buildPdfForm([{ name: 'ADDRESS', width: 260 }]);
+    // The value needs roughly 9.5pt here, so a floor above that must refuse.
+    await expect(fillPdf(template, () => LONG, { minFontSizePt: 11 })).rejects.toThrow(
+      /below 11pt/,
+    );
+  });
+});
