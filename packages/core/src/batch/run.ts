@@ -80,21 +80,42 @@ export interface BatchResult {
   readonly warnings: readonly FilenameWarning[];
 }
 
+/** One event from a streaming batch. */
+export type BatchEvent =
+  | { readonly type: 'document'; readonly document: GeneratedDocument }
+  | { readonly type: 'failure'; readonly failure: BatchFailure };
+
+/** What a streaming batch reports once every record has been attempted. */
+export interface BatchSummary {
+  readonly generated: number;
+  readonly failed: number;
+  /** Template fields with no matching column, as normalized keys. */
+  readonly unmatchedFields: readonly string[];
+  readonly warnings: readonly FilenameWarning[];
+}
+
 /**
- * Render one document per record.
+ * Render one document per record, yielding each as it is produced.
  *
- * Failures are collected per row rather than thrown, so a single malformed
- * record does not discard the work already done for the rest of the batch.
+ * This is the real implementation; {@link runBatch} is a thin collector over
+ * it. Yielding rather than accumulating is what lets a caller write each
+ * document straight to disk and keep peak memory flat, instead of holding the
+ * whole batch — which for hundreds of image-heavy documents is the difference
+ * between working and exhausting the tab.
+ *
+ * Failures are yielded rather than thrown, so one malformed record does not
+ * discard the work already done for the rest of the batch. A malformed
+ * *template* still throws, before any record is attempted.
  */
-export async function runBatch(
+export async function* streamBatch(
   template: Template,
   records: readonly DataRecord[],
   options: BatchOptions = {},
-): Promise<BatchResult> {
-  const documents: GeneratedDocument[] = [];
-  const failures: BatchFailure[] = [];
+): AsyncGenerator<BatchEvent, BatchSummary, void> {
   const takenNames = new Set<string>();
   const unmatched = new Set<string>();
+  let generated = 0;
+  let failed = 0;
 
   const warnings = options.filenameTemplate
     ? checkFilenameTemplate(options.filenameTemplate)
@@ -136,10 +157,11 @@ export async function runBatch(
         takenNames,
       );
 
-      documents.push({ row, filename, bytes: filled.bytes });
+      generated += 1;
+      yield { type: 'document', document: { row, filename, bytes: filled.bytes } };
     } catch (error) {
-      const failure = toFailure(row, error);
-      failures.push(failure);
+      failed += 1;
+      yield { type: 'failure', failure: toFailure(row, error) };
       if (options.stopOnError) break;
     }
 
@@ -147,10 +169,41 @@ export async function runBatch(
   }
 
   return {
-    documents,
-    failures,
+    generated,
+    failed,
     unmatchedFields: [...unmatched].map(normalizeKey),
     warnings,
+  };
+}
+
+/**
+ * Render one document per record, collecting the whole batch in memory.
+ *
+ * Convenient when the results are wanted together — to build a ZIP, or to list
+ * them for download. For large or image-heavy batches prefer
+ * {@link streamBatch}, which never holds more than one document at a time.
+ */
+export async function runBatch(
+  template: Template,
+  records: readonly DataRecord[],
+  options: BatchOptions = {},
+): Promise<BatchResult> {
+  const documents: GeneratedDocument[] = [];
+  const failures: BatchFailure[] = [];
+
+  const stream = streamBatch(template, records, options);
+  let next = await stream.next();
+  while (!next.done) {
+    if (next.value.type === 'document') documents.push(next.value.document);
+    else failures.push(next.value.failure);
+    next = await stream.next();
+  }
+
+  return {
+    documents,
+    failures,
+    unmatchedFields: next.value.unmatchedFields,
+    warnings: next.value.warnings,
   };
 }
 

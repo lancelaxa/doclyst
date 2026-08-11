@@ -200,6 +200,15 @@ no server, no upload endpoint and no backend to compromise.
 - **Downloads are local.** Generated documents are handed over as object URLs,
   which address an in-memory blob in that tab, not a location on a server. Each
   handle is released after use rather than kept for the life of the page.
+- **Writing to disk is scoped and temporary.** “Save to folder” and “Save as
+  ZIP” use the File System Access API, so the browser — not this page — decides
+  what may be written and where, after the user picks a location. That grant
+  covers only the chosen location and only that visit: the directory handle is
+  deliberately **never persisted**. Storing it in IndexedDB is the usual way to
+  reuse a folder across visits, and doing so would both break the no-storage
+  guarantee above and leave a standing write capability over someone's disk.
+  Streaming also means a failed write leaves no half-written document behind:
+  the writable is aborted rather than closed, and a partial ZIP is discarded.
 - **No markup injection.** Column headers, sheet names, placeholder keys and
   filenames all come from user files and are only ever assigned to
   `textContent`. There is no `innerHTML` in the app.

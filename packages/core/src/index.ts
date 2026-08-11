@@ -90,11 +90,14 @@ export {
 
 export {
   runBatch,
+  streamBatch,
   detectTemplateKind,
   readTemplateFields,
   type BatchOptions,
+  type BatchEvent,
   type BatchFailure,
   type BatchResult,
+  type BatchSummary,
   type GeneratedDocument,
   type Template,
   type TemplateKind,

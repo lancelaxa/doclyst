@@ -265,19 +265,40 @@ Measured on a 400-record batch with a typical ~180 KB letterhead template:
 | Browser, DOCX | 2.1 s | JS heap 7 MB → 48 MB, page stays responsive |
 | Browser, ZIP | 3.0 s | 31 MB archive |
 
-Row count is rarely the constraint — **total output size is**. Every generated
-document is held in memory until you download it, and building a ZIP holds a
-second copy. A few hundred ordinary documents is untroubled; the same count
-from a template carrying megabytes of embedded imagery is a different matter.
+Row count is rarely the constraint — **total output size is**. With
+**Generate documents**, every document is held in memory until you download it,
+and building a ZIP holds a second copy. A few hundred ordinary documents is
+untroubled; the same count from a template carrying megabytes of embedded
+imagery is a different matter. Past a few hundred MB the tab can hold over a
+gigabyte, and browsers cancel very large blob downloads *silently* — the button
+appears to do nothing.
 
-In the browser specifically, once a batch's documents total a few hundred MB
-the tab can hold over a gigabyte during the ZIP step, and browsers cancel very
-large blob downloads *silently* — the button appears to do nothing. Doclyst
-reports the total size after generating and warns past 300 MB, suggesting
-downloading files individually (unaffected, since each document is small) or
-using the CLI, which writes straight to disk and has no such ceiling.
+### Streaming straight to disk
 
-For very large or very heavy batches, prefer the CLI.
+**Save to folder…** and **Save as ZIP…** remove that ceiling. Each document is
+written to disk as it is produced and then released, so peak memory is roughly
+one document however large the batch:
+
+| 400 documents × 1.4 MB | Peak JS heap | Time |
+|---|---|---|
+| Generate (in memory) | 1,179 MB → ZIP download **cancelled** | — |
+| Save to folder | **83 MB** | 3.3 s |
+| Save as ZIP | **84 MB** | 4.7 s |
+
+Same 573 MB of output; ~14× less memory, and flat rather than growing with the
+batch. The streamed ZIP is byte-for-byte identical to the in-memory one.
+
+These use the File System Access API, which today means Chromium-based browsers
+(Chrome, Edge) over HTTPS or localhost. It is progressive enhancement: the
+buttons only appear where the API exists, and everywhere else the download path
+is exactly as before. Doclyst still reports total output size after generating
+and warns past 300 MB, pointing at whichever route is available to you.
+
+Your browser asks where to save. The page can only write to the location you
+pick, for that visit only — the handle is deliberately never persisted, since
+storing it would break the guarantee that nothing is written to browser storage.
+
+The CLI has no ceiling either; it writes straight to disk by design.
 
 ## Limitations
 

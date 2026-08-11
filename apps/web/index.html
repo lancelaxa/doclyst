@@ -127,7 +127,17 @@
 
         <section class="step" aria-labelledby="step-generate">
           <h2 id="step-generate"><span class="num">4</span> Generate</h2>
-          <button type="button" id="generate" disabled>Generate documents</button>
+          <div class="actions">
+            <button type="button" id="generate" disabled>Generate documents</button>
+            <button type="button" id="save-folder" disabled hidden>Save to folder…</button>
+            <button type="button" id="save-zip" disabled hidden>Save as ZIP…</button>
+          </div>
+          <p class="hint" id="streaming-hint" hidden>
+            “Save to folder” and “Save as ZIP” write each document to disk as it is
+            made, so memory stays flat no matter how large the batch. Your browser
+            asks where to save; this page can only write to the place you pick, and
+            only for this visit.
+          </p>
           <div class="progress" id="progress" hidden>
             <div class="bar"><div class="fill" id="progress-fill"></div></div>
             <span id="progress-label"></span>

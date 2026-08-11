@@ -10,13 +10,24 @@ import {
   readXlsxRecords,
   runBatch,
   safeErrorSummary,
+  streamBatch,
+  type BatchFailure,
   type BatchResult,
+  type BatchSummary,
   type DataRecord,
   type MissingValuePolicy,
   type Template,
 } from '@doclyst/core';
 import { byId, clear, el, nextFrame, replaceChildren } from './dom.js';
 import { downloadBytes } from './download.js';
+import {
+  StreamingZipWriter,
+  isAbort,
+  pickDirectory,
+  pickZipFile,
+  supportsFileSystemAccess,
+  writeFileTo,
+} from './filesystem.js';
 import './app.css';
 
 /**
@@ -69,6 +80,9 @@ const emptyIsMissing = byId<HTMLInputElement>('empty-is-missing');
 const scrubMetadata = byId<HTMLInputElement>('scrub-metadata');
 const flattenPdf = byId<HTMLInputElement>('flatten-pdf');
 const generateButton = byId<HTMLButtonElement>('generate');
+const saveFolderButton = byId<HTMLButtonElement>('save-folder');
+const saveZipButton = byId<HTMLButtonElement>('save-zip');
+const streamingHint = byId<HTMLParagraphElement>('streaming-hint');
 const progress = byId<HTMLDivElement>('progress');
 const progressFill = byId<HTMLDivElement>('progress-fill');
 const progressLabel = byId<HTMLSpanElement>('progress-label');
@@ -76,6 +90,14 @@ const results = byId<HTMLDivElement>('results');
 const templateSummary = byId<HTMLDivElement>('template-summary');
 const dataSummary = byId<HTMLDivElement>('data-summary');
 const filenameWarnings = byId<HTMLDivElement>('filename-warnings');
+
+// Progressive enhancement: these only appear where the browser can write to
+// a user-chosen location. Everywhere else the download path is unchanged.
+if (supportsFileSystemAccess()) {
+  saveFolderButton.hidden = false;
+  saveZipButton.hidden = false;
+  streamingHint.hidden = false;
+}
 
 // --- loading -----------------------------------------------------------
 
@@ -188,6 +210,134 @@ generateButton.addEventListener('click', () => {
   void generate();
 });
 
+saveFolderButton.addEventListener('click', () => {
+  void streamToDisk('folder');
+});
+
+saveZipButton.addEventListener('click', () => {
+  void streamToDisk('zip');
+});
+
+/**
+ * Generate straight to disk, never holding the batch in memory.
+ *
+ * Each document is written as it is produced, so peak memory is about one
+ * document regardless of how many records there are — which is what makes
+ * large, image-heavy batches possible at all.
+ */
+async function streamToDisk(target: 'folder' | 'zip'): Promise<void> {
+  if (!loadedTemplate || !loadedData) return;
+
+  let destination: Awaited<ReturnType<typeof pickDirectory>> | undefined;
+  let zipWriter: StreamingZipWriter | undefined;
+
+  try {
+    // The picker must be opened from the click, before any long work, or the
+    // browser treats it as lacking a user gesture and refuses.
+    if (target === 'folder') {
+      destination = await pickDirectory();
+      if (!destination) return;
+    } else {
+      const handle = await pickZipFile('doclyst-documents.zip');
+      if (!handle) return;
+      zipWriter = await StreamingZipWriter.create(handle);
+    }
+  } catch (error) {
+    // Dismissing the picker is a decision, not a failure.
+    if (!isAbort(error)) replaceChildren(results, warning(describeError(error)));
+    return;
+  }
+
+  setBusy(true);
+  clear(results);
+  progress.hidden = false;
+  updateProgress(0, loadedData.records.length);
+
+  const failures: BatchFailure[] = [];
+  let written = 0;
+  let bytesWritten = 0;
+
+  const stream = streamBatch(loadedTemplate.template, loadedData.records, {
+    missing: missingSelect.value as MissingValuePolicy,
+    treatEmptyAsMissing: emptyIsMissing.checked,
+    filenameTemplate: filenameInput.value.trim() || undefined,
+    docx: { scrubMetadata: scrubMetadata.checked },
+    pdf: { scrubMetadata: scrubMetadata.checked, flatten: flattenPdf.checked },
+    onProgress: async (completed, total) => {
+      updateProgress(completed, total);
+      if (completed % 5 === 0) await nextFrame();
+    },
+  });
+
+  try {
+    let next = await stream.next();
+    while (!next.done) {
+      if (next.value.type === 'failure') {
+        failures.push(next.value.failure);
+      } else {
+        const { filename, bytes } = next.value.document;
+        if (zipWriter) {
+          // A generated .docx is already a ZIP and a PDF is largely
+          // compressed, so entries are stored rather than deflated again.
+          await zipWriter.add(filename, bytes, false);
+        } else {
+          await writeFileTo(destination!, filename, bytes);
+        }
+        written += 1;
+        bytesWritten += bytes.length;
+      }
+      next = await stream.next();
+    }
+
+    await zipWriter?.close();
+    showStreamResult(next.value, target, written, bytesWritten, failures);
+  } catch (error) {
+    // Stop producing documents, and discard a half-written archive rather than
+    // leaving something that looks like a complete set.
+    await stream.return(undefined as never).catch(() => undefined);
+    await zipWriter?.abort(error).catch(() => undefined);
+    replaceChildren(
+      results,
+      warning(`Stopped after ${written} document(s): ${describeError(error)}`),
+    );
+  } finally {
+    progress.hidden = true;
+    setBusy(false);
+  }
+}
+
+function showStreamResult(
+  summary: BatchSummary,
+  target: 'folder' | 'zip',
+  written: number,
+  bytesWritten: number,
+  failures: readonly BatchFailure[],
+): void {
+  const nodes: Node[] = [
+    el('p', {
+      className: failures.length > 0 ? 'partial' : 'ok',
+      text:
+        `${written} document${written === 1 ? '' : 's'} written ` +
+        `${target === 'zip' ? 'to the ZIP' : 'to the folder'} (${formatBytes(bytesWritten)})` +
+        (failures.length > 0 ? `, ${failures.length} row(s) failed` : ''),
+    }),
+  ];
+
+  if (summary.unmatchedFields.length > 0) {
+    nodes.push(warning(`No column matched: ${summary.unmatchedFields.join(', ')}`));
+  }
+
+  if (failures.length > 0) {
+    const list = el('ul', { className: 'failure-list' });
+    for (const failure of failures) {
+      list.append(el('li', { text: `Row ${failure.row}: ${failure.message}` }));
+    }
+    nodes.push(el('h3', { text: 'Rows that failed' }), list);
+  }
+
+  replaceChildren(results, ...nodes);
+}
+
 async function generate(): Promise<void> {
   if (!loadedTemplate || !loadedData) return;
 
@@ -253,7 +403,11 @@ function showResults(result: BatchResult): void {
     if (totalBytes > LARGE_OUTPUT_WARNING_BYTES) {
       nodes.push(
         warning(
-          `These documents total ${formatBytes(totalBytes)}. A ZIP this large may fail to save — browsers cancel very large downloads without reporting it. Download the files individually below, or use the command-line tool, which writes straight to disk and has no such limit.`,
+          `These documents total ${formatBytes(totalBytes)}. A ZIP this large may fail to save — browsers cancel very large downloads without reporting it. ${
+            supportsFileSystemAccess()
+              ? 'Use “Save to folder” or “Save as ZIP” above, which write straight to disk and have no such limit.'
+              : 'Download the files individually below, or use the command-line tool, which writes straight to disk and has no such limit.'
+          }`,
         ),
       );
     }
@@ -288,6 +442,8 @@ function updateProgress(completed: number, total: number): void {
 
 function setBusy(busy: boolean): void {
   generateButton.disabled = busy || !ready();
+  saveFolderButton.disabled = busy || !ready();
+  saveZipButton.disabled = busy || !ready();
   generateButton.textContent = busy ? 'Generating…' : 'Generate documents';
 }
 
@@ -296,7 +452,7 @@ function ready(): boolean {
 }
 
 function refresh(): void {
-  generateButton.disabled = !ready();
+  setBusy(false);
 }
 
 // --- presentation helpers ----------------------------------------------

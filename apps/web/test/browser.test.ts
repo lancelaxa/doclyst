@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { unzipSync } from 'fflate';
 import { readDocxText } from '@doclyst/core';
 import { makeTemplate } from './helpers/template.js';
+import { installFakeFileSystem, removeFileSystemAccess } from './helpers/fake-fs.js';
 
 /**
  * End-to-end tests against the built page in a real browser.
@@ -318,6 +319,220 @@ describe('the built page', () => {
           && navigator.serviceWorker?.controller !== null,
       }));
       expect(stored).toEqual({ local: 0, session: 0, cookies: '', workers: false });
+      await page.close();
+    });
+  });
+
+  describe('writing straight to disk', () => {
+    /** Open the page with the File System Access pickers faked out. */
+    async function openWithFakeFs(): Promise<Page> {
+      const page = await browser.newPage();
+      await page.addInitScript(installFakeFileSystem);
+      await page.goto(origin, { waitUntil: 'networkidle' });
+      return page;
+    }
+
+    /** Read back what the fake filesystem recorded. */
+    async function written(page: Page): Promise<Record<string, Buffer>> {
+      const raw = await page.evaluate(
+        () => (window as unknown as { __fakeFs: { written: Record<string, number[]> } }).__fakeFs.written,
+      );
+      return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, Buffer.from(v)]));
+    }
+
+    it('offers the streaming actions when the browser supports them', async () => {
+      const page = await openWithFakeFs();
+      expect(await page.locator('#save-folder').isVisible()).toBe(true);
+      expect(await page.locator('#save-zip').isVisible()).toBe(true);
+      await page.close();
+    });
+
+    it('hides them on a browser without the API', async () => {
+      // Firefox and Safari have no File System Access API; the download path
+      // must remain the whole interface there.
+      const page = await browser.newPage();
+      await page.addInitScript(removeFileSystemAccess);
+      await page.goto(origin, { waitUntil: 'networkidle' });
+
+      expect(await page.locator('#save-folder').isVisible()).toBe(false);
+      expect(await page.locator('#save-zip').isVisible()).toBe(false);
+      // The in-memory route still works.
+      await loadInputs(page);
+      await page.click('#generate');
+      await expect.poll(() => page.textContent('#results')).toContain('3 documents ready');
+      await page.close();
+    });
+
+    it('writes one file per record into the chosen folder', async () => {
+      const page = await openWithFakeFs();
+      await loadInputs(page);
+      await page.click('#save-folder');
+
+      await expect.poll(() => page.textContent('#results')).toContain('3 documents written');
+      const files = await written(page);
+      expect(Object.keys(files).sort()).toEqual([
+        'document-0001.docx',
+        'document-0002.docx',
+        'document-0003.docx',
+      ]);
+      await page.close();
+    });
+
+    it('writes documents whose content is correctly substituted', async () => {
+      const page = await openWithFakeFs();
+      await loadInputs(page);
+      await page.click('#save-folder');
+      await expect.poll(() => page.textContent('#results')).toContain('3 documents written');
+
+      const files = await written(page);
+      const first = readDocxText(new Uint8Array(files['document-0001.docx']!));
+      expect(first).toContain('Aisha Rahman');
+      expect(first).toContain('4500');
+      // One person's data must not reach another's document.
+      expect(first).not.toContain('Wei Lun Tan');
+      expect(readDocxText(new Uint8Array(files['document-0002.docx']!))).toContain('Wei Lun Tan');
+      await page.close();
+    });
+
+    it('holds only one document open at a time', async () => {
+      // The property the streaming path exists for. If documents accumulated,
+      // writing to disk would not have removed the memory ceiling.
+      const page = await openWithFakeFs();
+      await loadInputs(page);
+      await page.click('#save-folder');
+      await expect.poll(() => page.textContent('#results')).toContain('3 documents written');
+
+      const stats = await page.evaluate(
+        () => (window as unknown as { __fakeFs: { stats: () => { maxOpenWritables: number } } })
+          .__fakeFs.stats(),
+      );
+      expect(stats.maxOpenWritables).toBe(1);
+      await page.close();
+    });
+
+    it('streams a valid ZIP to the chosen file', async () => {
+      const page = await openWithFakeFs();
+      await loadInputs(page);
+      await page.click('#save-zip');
+      await expect.poll(() => page.textContent('#results')).toContain('3 documents written');
+
+      const files = await written(page);
+      const archive = files['doclyst-documents.zip'];
+      expect(archive).toBeTruthy();
+
+      // The decisive check: the incrementally written archive must actually
+      // parse, with every document intact.
+      const entries = unzipSync(new Uint8Array(archive!));
+      expect(Object.keys(entries).sort()).toEqual([
+        'document-0001.docx',
+        'document-0002.docx',
+        'document-0003.docx',
+      ]);
+      expect(readDocxText(entries['document-0001.docx']!)).toContain('Aisha Rahman');
+      await page.close();
+    });
+
+    it('produces a streamed ZIP equivalent to the in-memory one', async () => {
+      const page = await openWithFakeFs();
+      await loadInputs(page);
+      await page.click('#save-zip');
+      await expect.poll(() => page.textContent('#results')).toContain('3 documents written');
+      const streamed = unzipSync(new Uint8Array((await written(page))['doclyst-documents.zip']!));
+
+      await page.click('#generate');
+      await expect.poll(() => page.textContent('#results')).toContain('documents ready');
+      const download = page.waitForEvent('download');
+      await page.getByRole('button', { name: 'Download all as ZIP' }).click();
+      const stream = await (await download).createReadStream();
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) chunks.push(chunk as Buffer);
+      const inMemory = unzipSync(new Uint8Array(Buffer.concat(chunks)));
+
+      expect(Object.keys(streamed).sort()).toEqual(Object.keys(inMemory).sort());
+      for (const name of Object.keys(inMemory)) {
+        expect(streamed[name]).toEqual(inMemory[name]);
+      }
+      await page.close();
+    });
+
+    it('reports a failing row and still writes the rest', async () => {
+      const page = await openWithFakeFs();
+      await page.setInputFiles('#template-input', {
+        name: 'offer.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        buffer: Buffer.from(makeTemplate(['FULL_NAME', 'BASIC_SALARY'])),
+      });
+      await page.setInputFiles('#data-input', {
+        name: 'staff.csv',
+        mimeType: 'text/csv',
+        buffer: Buffer.from('Full Name,Basic Salary\nAisha Rahman,4500\nWei Lun Tan,\n'),
+      });
+      await page.check('#empty-is-missing');
+      await page.click('#save-folder');
+
+      await expect.poll(() => page.textContent('#results')).toContain('1 row(s) failed');
+      expect(Object.keys(await written(page))).toEqual(['document-0001.docx']);
+      const failures = (await page.textContent('.failure-list')) ?? '';
+      expect(failures).toContain('Row 2');
+      expect(failures).not.toContain('Wei Lun Tan');
+      await page.close();
+    });
+
+    it('treats a dismissed picker as a decision, not an error', async () => {
+      const page = await browser.newPage();
+      await page.addInitScript(installFakeFileSystem);
+      await page.addInitScript(`
+        window.showDirectoryPicker = async () => {
+          throw new DOMException('The user aborted a request.', 'AbortError');
+        };
+      `);
+      await page.goto(origin, { waitUntil: 'networkidle' });
+      await loadInputs(page);
+      await page.click('#save-folder');
+
+      await page.waitForTimeout(300);
+      expect((await page.textContent('#results')) ?? '').toBe('');
+      expect(await page.locator('#progress').isVisible()).toBe(false);
+      await page.close();
+    });
+
+    it('reports a disk failure instead of claiming success', async () => {
+      const page = await browser.newPage();
+      await page.addInitScript(installFakeFileSystem);
+      await page.addInitScript(`
+        const realPicker = window.showDirectoryPicker;
+        window.showDirectoryPicker = async () => {
+          const dir = await realPicker();
+          let calls = 0;
+          return {
+            ...dir,
+            async getFileHandle(name) {
+              calls += 1;
+              if (calls > 1) throw new DOMException('Quota exceeded.', 'QuotaExceededError');
+              return dir.getFileHandle(name);
+            },
+          };
+        };
+      `);
+      await page.goto(origin, { waitUntil: 'networkidle' });
+      await loadInputs(page);
+      await page.click('#save-folder');
+
+      await expect.poll(() => page.textContent('#results')).toContain('Stopped after 1 document');
+      await page.close();
+    });
+
+    it('makes no off-origin request while streaming to disk', async () => {
+      const page = await browser.newPage();
+      const requests: string[] = [];
+      page.on('request', (r) => { if (!r.url().startsWith(origin)) requests.push(r.url()); });
+      await page.addInitScript(installFakeFileSystem);
+      await page.goto(origin, { waitUntil: 'networkidle' });
+      await loadInputs(page);
+      await page.click('#save-zip');
+      await expect.poll(() => page.textContent('#results')).toContain('documents written');
+
+      expect(requests).toEqual([]);
       await page.close();
     });
   });

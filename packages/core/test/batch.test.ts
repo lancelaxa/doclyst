@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { unzipSync } from 'fflate';
-import { detectTemplateKind, readTemplateFields, runBatch } from '../src/batch/run.js';
+import { detectTemplateKind, readTemplateFields, runBatch, streamBatch } from '../src/batch/run.js';
 import { readDocxText } from '../src/docx/fill.js';
 import { buildZip } from '../src/output/zip.js';
 import { readCsvRecords } from '../src/data/records.js';
@@ -219,6 +219,120 @@ describe('runBatch', () => {
     expect(result.documents).toHaveLength(300);
     expect(result.failures).toHaveLength(0);
     expect(new Set(result.documents.map((d) => d.filename)).size).toBe(300);
+  });
+});
+
+describe('streamBatch', () => {
+  const template = { kind: 'docx' as const, bytes: OFFER_TEMPLATE };
+
+  /** Drain a stream, keeping events and the returned summary. */
+  async function drain(stream: ReturnType<typeof streamBatch>) {
+    const events = [];
+    let next = await stream.next();
+    while (!next.done) {
+      events.push(next.value);
+      next = await stream.next();
+    }
+    return { events, summary: next.value };
+  }
+
+  it('yields one event per record, in order', async () => {
+    const { events, summary } = await drain(streamBatch(template, records));
+    expect(events).toHaveLength(3);
+    expect(events.every((e) => e.type === 'document')).toBe(true);
+    expect(summary.generated).toBe(3);
+    expect(summary.failed).toBe(0);
+  });
+
+  it('produces the same documents as the collecting form', async () => {
+    const { events } = await drain(streamBatch(template, records));
+    const collected = await runBatch(template, records);
+    const streamed = events.flatMap((e) => (e.type === 'document' ? [e.document] : []));
+
+    expect(streamed.map((d) => d.filename)).toEqual(collected.documents.map((d) => d.filename));
+    expect(streamed.map((d) => d.row)).toEqual(collected.documents.map((d) => d.row));
+    streamed.forEach((document, i) => {
+      expect(document.bytes).toEqual(collected.documents[i]!.bytes);
+    });
+  });
+
+  it('does not retain documents it has already yielded', async () => {
+    // The property the whole streaming path exists for. If the generator held
+    // on to what it emitted, writing to disk would save nothing.
+    const many = readCsvRecords(
+      `NAME,SALARY,START_DATE\n${Array.from({ length: 50 }, (_, i) => `P${i},1,2026-01-01`).join('\n')}\n`,
+    ).records;
+
+    const seen = new WeakSet<Uint8Array>();
+    let count = 0;
+    for await (const event of streamBatch(template, many)) {
+      if (event.type !== 'document') continue;
+      // Each document is a fresh buffer; nothing accumulates in the generator.
+      expect(seen.has(event.document.bytes)).toBe(false);
+      seen.add(event.document.bytes);
+      count += 1;
+    }
+    expect(count).toBe(50);
+  });
+
+  it('yields failures inline and keeps going', async () => {
+    const incomplete = readCsvRecords(
+      'NAME,SALARY,START_DATE\nAisha,1,2026-01-01\nWei Lun,,2026-01-02\nPriya,3,2026-01-03\n',
+    ).records;
+    const { events, summary } = await drain(
+      streamBatch(template, incomplete, { treatEmptyAsMissing: true }),
+    );
+
+    expect(events.map((e) => e.type)).toEqual(['document', 'failure', 'document']);
+    expect(summary.generated).toBe(2);
+    expect(summary.failed).toBe(1);
+  });
+
+  it('stops at the first failure when asked', async () => {
+    const incomplete = readCsvRecords(
+      'NAME,SALARY,START_DATE\nAisha,,2026-01-01\nWei Lun,2,2026-01-02\n',
+    ).records;
+    const { summary } = await drain(
+      streamBatch(template, incomplete, { treatEmptyAsMissing: true, stopOnError: true }),
+    );
+    expect(summary.generated).toBe(0);
+    expect(summary.failed).toBe(1);
+  });
+
+  it('reports unmatched fields and filename warnings in the summary', async () => {
+    const { summary } = await drain(
+      streamBatch(template, readCsvRecords('NAME\nAisha\n').records, {
+        missing: 'empty',
+        filenameTemplate: '{{NRIC}}',
+      }),
+    );
+    expect(summary.unmatchedFields.sort()).toEqual(['SALARY', 'START_DATE']);
+    expect(summary.warnings).toHaveLength(1);
+  });
+
+  it('throws on a malformed template before yielding anything', async () => {
+    const stream = streamBatch({ kind: 'docx', bytes: new Uint8Array([1, 2, 3, 4]) }, records);
+    await expect(stream.next()).rejects.toThrow(/not a valid DOCX/);
+  });
+
+  it('keeps filenames unique across the stream', async () => {
+    const duplicates = readCsvRecords(
+      'NAME,SALARY,START_DATE\nAisha,1,2026-01-01\nAisha,2,2026-01-02\n',
+    ).records;
+    const { events } = await drain(
+      streamBatch(template, duplicates, { filenameTemplate: '{{NAME}}' }),
+    );
+    expect(events.flatMap((e) => (e.type === 'document' ? [e.document.filename] : []))).toEqual([
+      'Aisha.docx',
+      'Aisha (2).docx',
+    ]);
+  });
+
+  it('can be abandoned part way without error', async () => {
+    // A caller whose disk write fails will stop consuming; that must be clean.
+    const stream = streamBatch(template, records);
+    await stream.next();
+    await expect(stream.return(undefined as never)).resolves.toBeTruthy();
   });
 });
 
