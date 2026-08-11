@@ -96,11 +96,27 @@ offer letters.
 
 ---
 
-## Step 1 — Prepare your template
+## Step 1 — Your template
 
 You need **one** template. Doclyst fills it once per row of your spreadsheet.
+Either kind uses the same `{{PLACEHOLDER}}` markers; what differs is what the
+finished document looks like.
 
-### Word documents (.docx) — recommended
+| | Word template | PDF template |
+|---|---|---|
+| Output | `.docx`, or PDF that is re-typeset | PDF, an **exact** copy of your design |
+| Letterhead, logo, fonts | Kept in `.docx` output; lost in PDF output | Kept exactly |
+| Tables, images, headers | Kept in `.docx` output; lost in PDF output | Kept exactly |
+| Editing it | Straight from Word | Edit in Word, export, prepare again |
+| Long values | Reflow normally | Must fit their box; checked in advance |
+
+**Use a PDF template for anything a candidate, employee or regulator will
+see.** Use a Word template when the output is a `.docx` anyway, or when the
+wording matters more than the look.
+
+Both start in Word, so this is not a decision you are locked into.
+
+### Word templates (.docx)
 
 Write the document as you normally would, and type a placeholder wherever a
 value should go:
@@ -130,27 +146,40 @@ Rules worth knowing:
 > Word sometimes autocorrects the braces into “smart quotes”, which stops it
 > being recognised. If a field is not detected, delete it and retype it.
 
-### PDF documents (.pdf)
+### PDF templates (.pdf) — for an exact letterhead
 
-PDF works differently: you must add **form fields** and name them after your
-columns. Either `FULL_NAME` or `{{FULL_NAME}}` works as the field name.
+A PDF template is filled, not rebuilt, so the design that comes out is the
+design you made: fonts, logo, spacing, margins and signature block, identical
+every time.
 
-Text boxes, checkboxes, dropdowns, option lists and radio buttons are all
-supported. For checkboxes, the values `Yes`, `Y`, `TRUE`, `1`, `X`, `checked`
-and `on` tick the box; anything else leaves it clear.
+You still write it in Word:
 
-> **Typing `{{NAME}}` as ordinary text in a PDF will not work.** A PDF stores
-> text as positioned glyphs, not editable words, so swapping in a longer value
-> would break the layout. Doclyst tells you plainly rather than producing a
-> mangled document. If you only have a flat PDF, either add form fields with a
-> PDF editor, or use a Word template instead.
+1. **Write the letter in Word** with `{{PLACEHOLDERS}}` where the values go,
+   named after your spreadsheet columns.
+2. **File → Save as → PDF.** Word does the layout, which is what preserves the
+   appearance.
+3. **Drop that PDF into Doclyst** and press **Prepare this template**. Every
+   placeholder becomes a fillable field in the same position, size and
+   typeface; nothing else on the page moves. Download the prepared template and
+   reuse it for every batch after that.
 
-Password-protected PDFs are rejected rather than quietly stripped of their
-protection. Remove the password first if you intend to use one as a template.
+No PDF editor needed. On the command line, step 3 is `doclyst prepare`.
+
+A PDF **scan** cannot be used — there is no text in it to find, only a picture
+of text. Password-protected PDFs are rejected rather than quietly stripped of
+their protection; remove the password first.
+
+#### If someone hands you a PDF with form fields already in it
+
+That works too, and needs no preparing. Name each field after its column —
+either `FULL_NAME` or `{{FULL_NAME}}`. Text boxes, checkboxes, dropdowns,
+option lists and radio buttons are all supported. For checkboxes, the values
+`Yes`, `Y`, `TRUE`, `1`, `X`, `checked` and `on` tick the box; anything else
+leaves it clear.
 
 ---
 
-## Step 2 — Prepare your spreadsheet
+## Step 2 — Your spreadsheet
 
 A `.csv` or `.xlsx` where the **first row is the column headers** and each
 following row is one person:
@@ -194,8 +223,11 @@ documents:
 1. Open the page (`npm run dev:web`, or open the built `index.html`).
 2. **Drop your template** into the first box, or click to choose it.
    Doclyst lists the placeholders it found — check they look right.
+   *If it is a PDF that still has `{{PLACEHOLDERS}}` written in it, press
+   **Prepare this template** first.*
 3. **Drop your spreadsheet** into the second box. It shows the row count and
-   column names.
+   column names, and — for a PDF template — whether every field is big enough
+   for your data.
 4. Look for the green line: *“Every template placeholder has a matching
    column.”* If instead you see **“No column matches: …”**, fix that before
    generating — otherwise every row will fail.
@@ -215,41 +247,10 @@ invisible in a summary.
 
 ---
 
-## Keeping your letterhead exactly as designed
+## Working with PDF templates
 
-Use a **PDF template**. This is the only route that preserves appearance
-exactly, because Doclyst fills your actual PDF — the design is not
-reproduced, it *is* the original file. Fonts, logo, spacing, margins and
-signature block come out identical, every time.
-
-Word templates are more convenient to edit; PDF templates are what you want
-for anything a candidate, employee or regulator will see.
-
-### Making one from your existing Word letter
-
-1. **Open your letter in Word** and write `{{PLACEHOLDERS}}` where the variable
-   values go — `{{FULL_NAME}}`, `{{BASIC_SALARY}}`. Name them after your
-   spreadsheet columns. Leave the design alone.
-2. **File → Save as → PDF.** Word does the layout, so the result looks exactly
-   like the Word document. This is the step that preserves the appearance.
-3. **Drop the PDF into Doclyst and press “Prepare this template”.** It finds
-   every placeholder, takes the text off the page, and puts a fillable field in
-   its place — same position, same size, same typeface. Download the prepared
-   template and reuse it for every batch after that.
-4. **Check it** against your data — see below.
-
-No PDF editor needed. On the command line the same step is:
-
-```bash
-node apps/cli/dist/bin.js prepare \
-  --template offer-letter.pdf \
-  --out offer-letter-template.pdf \
-  --widen 1.5
-```
-
-`--widen` makes each field wider than the placeholder it replaces, since a real
-value is usually longer than `{{FULL_NAME}}`. Fields are never widened over the
-text that follows them on a line.
+Everything in this section applies once you have chosen the PDF route in
+Step 1. None of it is needed for a Word template.
 
 ### Where to put the placeholders
 
@@ -270,12 +271,27 @@ Position:        {{JOB_TITLE}}
 Monthly salary:  {{BASIC_SALARY}}
 ```
 
-### If you would rather place the fields yourself
+### Making the fields wider
 
-Any PDF editor will do it — Acrobat (Prepare a Form), LibreOffice Draw (free),
-or Xournal++. Name each field after your spreadsheet column; either `NAME` or
-`{{NAME}}` works. Make the boxes generous, and turn on multiline for addresses
-so long ones wrap. Doclyst fills a hand-made template exactly the same way.
+A real value is usually longer than `{{FULL_NAME}}`, and a form field hides
+whatever does not fit. In the browser the fields are made the size of the
+placeholder; on the command line, `--widen 1.5` makes each one half as wide
+again:
+
+```bash
+node apps/cli/dist/bin.js prepare \
+  --template offer-letter.pdf \
+  --out offer-letter-template.pdf \
+  --widen 1.5
+```
+
+A field is never widened over the text that follows it on a line, so this
+cannot cause the two to overlap. Where there is not enough room, the value
+shrinks to fit and you are told which fields that happened to.
+
+If you would rather place the fields by hand, any PDF editor will do it —
+Acrobat (Prepare a Form), LibreOffice Draw, or Xournal++. Doclyst fills a
+hand-made template in exactly the same way.
 
 ### Changing a template later
 
@@ -340,7 +356,7 @@ difference is visible.
 
 ---
 
-## Getting PDFs instead of Word files
+## Getting PDFs from a Word template
 
 Set **Output format** to *PDF* in the browser, or pass `--output pdf` on the
 command line. A PDF template always produces PDF, so the setting only applies
@@ -356,9 +372,8 @@ engine, and none runs inside a browser tab. The only other way to do it would
 be to upload your documents to a conversion service — which is the one thing
 this tool is built never to do.
 
-**If appearance matters, use a PDF template instead** (see *Keeping your
-letterhead exactly as designed*, above). That route is exact, because Doclyst
-fills your real PDF rather than rebuilding it.
+**If appearance matters, use a PDF template instead** — see Step 1. That route
+is exact, because Doclyst fills your real PDF rather than rebuilding it.
 
 **Two things to check before you run a batch as PDF:**
 
@@ -450,8 +465,17 @@ A few hundred documents is routine. For bigger or heavier jobs:
 
 Useful for repeat runs and scheduled jobs. Same engine, same results.
 
-**Check before you run** — this catches mapping mistakes without producing
-anything:
+**Prepare a PDF template** — only for a PDF that still has placeholders
+written into it, and only once per template:
+
+```bash
+node apps/cli/dist/bin.js prepare \
+  --template offer-letter.pdf \
+  --out offer-letter-template.pdf
+```
+
+**Check before you run** — this catches mapping mistakes, and sizing mistakes,
+without producing anything:
 
 ```bash
 node apps/cli/dist/bin.js inspect \
@@ -468,6 +492,10 @@ Data: staff.csv
 
 Every template placeholder has a matching column.
 ```
+
+For a PDF template it also measures every field against the widest value in
+your data, and exits non-zero if one cannot fit — so a scheduled job stops
+rather than sending letters with a missing address.
 
 **Generate:**
 
@@ -487,7 +515,8 @@ Useful options:
 |---|---|
 | `--zip out.zip` | Also (or instead) write one ZIP |
 | `--sheet "Sheet2"` | Choose a worksheet by name or number |
-| `--output pdf` | Write PDFs instead of Word files (see above) |
+| `--output pdf` | Write PDFs from a Word template (see above) |
+| `--widen 1.5` | `prepare` only: make each field wider than its placeholder |
 | `--missing empty` | Blank out missing values instead of failing the row |
 | `--empty-is-missing` | Treat blank cells as missing |
 | `--dry-run` | Report what would happen; write nothing |
@@ -499,7 +528,10 @@ read (`0600`), plus a `manifest.csv` recording which row produced which file
 and what failed. The manifest contains **no field values** — only row numbers,
 filenames and outcomes, so it is safe to keep or attach to a ticket.
 
-Exit codes: `0` all good, `1` finished with some failed rows, `2` wrong usage.
+Exit codes: `0` all good, `1` finished with some failed rows (or a template
+field too small), `2` wrong usage.
+
+Run `node apps/cli/dist/bin.js --help` for the full list.
 
 ---
 

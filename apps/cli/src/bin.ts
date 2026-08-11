@@ -60,7 +60,26 @@ Exit codes
   0 success   1 completed with failures   2 bad usage
 `;
 
+/**
+ * Keep working when the reader of our output goes away.
+ *
+ * Piping to `head`, or quitting a pager, closes stdout; Node then raises EPIPE
+ * as an unhandled stream error and the process dies mid-run. That killed
+ * `prepare` after it had created its output file but before it had written
+ * anything to it, leaving a zero-byte file that blocked the next attempt with
+ * "refusing to overwrite". The work is worth finishing whether or not anyone
+ * is still reading the commentary.
+ */
+function ignoreClosedOutput(): void {
+  for (const stream of [process.stdout, process.stderr]) {
+    stream.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code !== 'EPIPE') throw error;
+    });
+  }
+}
+
 async function main(argv: readonly string[]): Promise<number> {
+  ignoreClosedOutput();
   const args = parseArgs(argv);
   const ctx: CommandContext = {
     log: (message) => process.stdout.write(`${message}\n`),

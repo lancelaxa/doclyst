@@ -3,6 +3,8 @@ import { mkdtemp, mkdir, readFile, readlink, rm, stat, symlink, writeFile } from
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { unzipSync } from 'fflate';
 import { readDocxText, readPdfFields } from '@doclyst/core';
 import { parseArgs, getBoolean, getString } from '../src/args.js';
@@ -161,6 +163,29 @@ describe('CLI commands', () => {
         await prepareCommand(parseArgs(['prepare', '--template', source, '--out', target]), ctx),
       ).toBe(1);
       expect(await readFile(target, 'utf8')).toBe('existing');
+    });
+
+    it('still writes the template when its output is piped to head', async () => {
+      // Regression: closing stdout raised EPIPE as an unhandled stream error
+      // and killed the process after it had created the output file but before
+      // writing to it. That left a zero-byte file, and the next attempt refused
+      // to overwrite it — reading as though something there were worth keeping.
+      const cli = fileURLToPath(new URL('../dist/bin.js', import.meta.url));
+      if (!existsSync(cli)) throw new Error('Build the CLI first: npm run build');
+
+      const source = join(dir, 'letter.pdf');
+      const target = join(dir, 'piped.pdf');
+      await writeFile(source, await makePlaceholderPdf());
+
+      execSync(
+        `node ${JSON.stringify(cli)} prepare --template ${JSON.stringify(source)} --out ${JSON.stringify(target)} 2>/dev/null | head -1`,
+        { shell: '/bin/bash' },
+      );
+
+      const written = new Uint8Array(await readFile(target));
+      expect(written.length).toBeGreaterThan(1000);
+      expect(Buffer.from(written.slice(0, 5)).toString()).toBe('%PDF-');
+      expect(await readPdfFields(written)).toHaveLength(2);
     });
 
     it('tells the user to export to PDF first when given a Word file', async () => {

@@ -181,11 +181,11 @@ export async function fillPdf(
     if (value === `{{${key}}}`) continue;
 
     applyFieldValue(field, value, key);
-    // A field drawn with an adopted font is measured against that font further
-    // down; measuring it here with pdf-lib's default would judge it by metrics
-    // it will never be drawn in.
-    if (field instanceof PDFTextField && !usesAdoptedFont(field)) {
-      const shrunk = fitTextField(field, value, key, defaultFont, overflow, minFontSize);
+    if (field instanceof PDFTextField) {
+      // Measured against whichever font will draw it, so a prepared template is
+      // judged by its own typeface rather than by pdf-lib's default.
+      const measurer = measurerForField(form, field, defaultFont);
+      const shrunk = fitTextField(field, value, key, measurer, overflow, minFontSize);
       if (shrunk !== undefined) shrunkFields.push(shrunk);
     }
     replaced += 1;
@@ -198,14 +198,13 @@ export async function fillPdf(
   // Fields pointing at a font adopted from the page are drawn here, because
   // pdf-lib generates appearances with its own font and would silently swap the
   // typeface on every value.
-  const adopted = drawAdoptedFields(doc, form, resolve, overflow, minFontSize);
-  shrunkFields.push(...adopted.shrunk);
+  const adopted = drawAdoptedFields(doc, form, resolve);
 
   if (flatten) {
     try {
       // Appearances already generated above must not be regenerated, or the
       // adopted font would be replaced by pdf-lib's default after all.
-      form.flatten({ updateFieldAppearances: adopted.drawn === 0 });
+      form.flatten({ updateFieldAppearances: adopted === 0 });
     } catch (error) {
       throw new DoclystError(
         'RENDER_FAILED',
@@ -219,7 +218,7 @@ export async function fillPdf(
   // Flattening already rasterises each field's appearance stream, so asking
   // for a second pass would be wasted work. When the caller keeps the fields
   // interactive, appearances must be regenerated or viewers show empty boxes.
-  const bytes = await doc.save({ updateFieldAppearances: !flatten && adopted.drawn === 0 });
+  const bytes = await doc.save({ updateFieldAppearances: !flatten && adopted === 0 });
   return { bytes, replaced, shrunkFields };
 }
 
@@ -238,25 +237,22 @@ function drawAdoptedFields(
   doc: PDFDocument,
   form: ReturnType<PDFDocument['getForm']>,
   resolve: PlaceholderResolver,
-  overflow: OverflowPolicy,
-  minSize: number,
-): { drawn: number; shrunk: string[] } {
+): number {
   const resources = form.acroForm.dict.lookup(PDFName.of('DR'));
   const formFonts =
     resources instanceof PDFDict ? resources.lookup(PDFName.of('Font')) : undefined;
-  if (!(formFonts instanceof PDFDict)) return { drawn: 0, shrunk: [] };
+  if (!(formFonts instanceof PDFDict)) return 0;
 
   let drawn = 0;
-  const shrunk: string[] = [];
   for (const field of form.getFields()) {
     if (!(field instanceof PDFTextField)) continue;
 
-    const appearance = field.acroField.getDefaultAppearance() ?? '';
-    const fontName = /\/(\S+)\s+([\d.]+)\s+Tf/.exec(appearance);
-    if (fontName === null || !(fontName[1] ?? '').startsWith(ADOPTED_FONT_PREFIX)) continue;
+    const name = adoptedFontName(field);
+    if (name === undefined) continue;
 
-    const name = fontName[1] as string;
-    const size = Number.parseFloat(fontName[2] as string);
+    const appearance = field.acroField.getDefaultAppearance() ?? '';
+    const size = Number.parseFloat(/\/\S+\s+([\d.]+)\s+Tf/.exec(appearance)?.[1] ?? '0');
+    if (!Number.isFinite(size) || size <= 0) continue;
     const fontDict = formFonts.lookup(PDFName.of(name));
     if (!(fontDict instanceof PDFDict)) continue;
 
@@ -265,21 +261,40 @@ function drawAdoptedFields(
     if (value === `{{${key}}}`) continue;
 
     const font = readFontFromDict(fontDict);
-    const result = drawFieldValue(doc, form, field, formFonts, name, font, size, value, key, overflow, minSize);
-    if (result === 'drawn') drawn += 1;
-    else if (result === 'shrunk') {
+    if (drawFieldValue(doc, form, field, formFonts, name, font, size, value) === 'drawn') {
       drawn += 1;
-      shrunk.push(key);
     }
   }
-  return { drawn, shrunk };
+  return drawn;
 }
 
-/** Whether a field is set to be drawn with a font adopted from the page. */
-function usesAdoptedFont(field: PDFTextField): boolean {
+/**
+ * The font a field will actually be drawn with.
+ *
+ * A prepared template points its fields at a font lifted from the page; every
+ * other field falls to pdf-lib's default. Both filling and the pre-flight check
+ * ask this, so they cannot disagree.
+ */
+function measurerForField(
+  form: ReturnType<PDFDocument['getForm']>,
+  field: PDFTextField,
+  fallback: PDFFont | undefined,
+): Measurer | undefined {
+  const adoptedName = adoptedFontName(field);
+  if (adoptedName !== undefined) {
+    const resources = form.acroForm.dict.lookup(PDFName.of('DR'));
+    const fonts = resources instanceof PDFDict ? resources.lookup(PDFName.of('Font')) : undefined;
+    const dict = fonts instanceof PDFDict ? fonts.lookup(PDFName.of(adoptedName)) : undefined;
+    if (dict instanceof PDFDict) return measurerForAdopted(readFontFromDict(dict));
+  }
+  return fallback === undefined ? undefined : measurerFor(fallback);
+}
+
+/** Name of the adopted font a field's default appearance points at, if any. */
+function adoptedFontName(field: PDFTextField): string | undefined {
   const appearance = field.acroField.getDefaultAppearance() ?? '';
   const name = /\/(\S+)\s+[\d.]+\s+Tf/.exec(appearance)?.[1];
-  return name !== undefined && name.startsWith(ADOPTED_FONT_PREFIX);
+  return name !== undefined && name.startsWith(ADOPTED_FONT_PREFIX) ? name : undefined;
 }
 
 /** Write one field's appearance stream, drawing the value in the given font. */
@@ -292,10 +307,7 @@ function drawFieldValue(
   font: FontInfo,
   size: number,
   value: string,
-  key: string,
-  overflow: OverflowPolicy,
-  minSize: number,
-): 'drawn' | 'shrunk' | 'skipped' {
+): 'drawn' | 'skipped' {
   // A font that cannot spell the value is not used for it. Leaving the field to
   // pdf-lib's default font shows the value in the wrong typeface, which is far
   // better than showing it with holes where letters should be.
@@ -311,29 +323,10 @@ function drawFieldValue(
     .map((code) => code.toString(16).padStart(width * 2, '0'))
     .join('');
 
-  // Shrink to the box using this font's own metrics, not pdf-lib's, since this
-  // is the font the value will actually be drawn in.
-  const advance = codes.reduce((sum, code) => sum + font.widthOf(code), 0) / 1000;
-  const available = rectangle.width - 4;
-  const overflows = advance > 0 && advance * size > available;
-
-  if (overflows && overflow === 'error') {
-    throw new DoclystError(
-      'INVALID_DATA',
-      `The value for "${key}" is too long for that field in the PDF template, and a PDF form field hides whatever does not fit. Widen the field, allow more lines, or shorten the value.`,
-      { field: key },
-    );
-  }
-
-  const fitted = overflows ? available / advance : size;
-  if (overflows && overflow !== 'ignore' && fitted < minSize) {
-    throw new DoclystError(
-      'INVALID_DATA',
-      `The value for "${key}" cannot be made to fit that field in the PDF template without shrinking it below ${minSize}pt, which would be unreadable. Widen the field, allow more lines, or shorten the value.`,
-      { field: key },
-    );
-  }
-  const drawSize = overflows && overflow !== 'ignore' ? fitted : size;
+  // The size is already settled: every field went through the fit pass above,
+  // measured against this same font, and that pass wrote the result into the
+  // default appearance. Deciding it again here is how the two could disagree.
+  const drawSize = size;
 
   // Sit the text on a baseline that centres the cap height in the box.
   const baseline = (rectangle.height - drawSize * 0.72) / 2;
@@ -362,8 +355,7 @@ function drawFieldValue(
   // pdf-lib regenerates the appearance of any field still marked dirty, which
   // would replace what was just drawn with its own default font.
   form.markFieldAsClean(field.ref);
-
-  return overflows && overflow !== 'ignore' ? 'shrunk' : 'drawn';
+  return 'drawn';
 }
 
 /**
@@ -468,13 +460,13 @@ function fitTextField(
   field: PDFTextField,
   value: string,
   key: string,
-  font: PDFFont | undefined,
+  measurer: Measurer | undefined,
   policy: OverflowPolicy,
   minSize: number,
 ): string | undefined {
-  if (policy === 'ignore' || value === '' || font === undefined) return undefined;
+  if (policy === 'ignore' || value === '' || measurer === undefined) return undefined;
 
-  const measured = measureFit(field, value, font, minSize);
+  const measured = measureFit(field, value, measurer, minSize);
   if (measured === undefined || measured.outcome === 'fits') return undefined;
 
   if (policy === 'error' || measured.outcome === 'overflows') {
@@ -492,6 +484,47 @@ function fitTextField(
 }
 
 /** What would happen to a value placed in a field: the measurement, no writing. */
+/**
+ * Measures text the way the field will actually draw it.
+ *
+ * A prepared template draws its values in the font lifted from the page, not in
+ * pdf-lib's default, so measuring against the default answered a question
+ * nobody asked: `inspect` called three fields tight where filling shrank one.
+ * Both paths go through this now, so the check predicts the run.
+ */
+interface Measurer {
+  /** Width of `text` at `size`, or undefined if the font cannot spell it. */
+  widthOf(text: string, size: number): number | undefined;
+  /** Height of a line at `size`. */
+  heightAt(size: number): number;
+}
+
+function measurerFor(font: PDFFont): Measurer {
+  return {
+    widthOf: (text, size) => {
+      try {
+        return font.widthOfTextAtSize(text, size);
+      } catch {
+        return undefined;
+      }
+    },
+    heightAt: (size) => font.heightAtSize(size),
+  };
+}
+
+function measurerForAdopted(font: FontInfo): Measurer {
+  return {
+    widthOf: (text, size) => {
+      const codes = font.encode(text);
+      if (codes === undefined) return undefined;
+      return codes.reduce((sum, code) => sum + font.widthOf(code), 0) * (size / 1000);
+    },
+    // Without the font's own ascent and descent this is an approximation, and a
+    // generous one, so a single line is never judged too tall for its box.
+    heightAt: (size) => size,
+  };
+}
+
 export interface FieldFit {
   readonly outcome: 'fits' | 'shrinks' | 'overflows';
   /** Size the text would be drawn at. Equals the template's size when it fits. */
@@ -510,7 +543,7 @@ export interface FieldFit {
 function measureFit(
   field: PDFTextField,
   value: string,
-  font: PDFFont,
+  measurer: Measurer,
   minSize: number,
 ): FieldFit | undefined {
   const widget = field.acroField.getWidgets()[0];
@@ -532,7 +565,7 @@ function measureFit(
     declared === undefined || declared === 0 ? AUTO_SIZE_CEILING_PT : declared;
   const multiline = field.isMultiline();
 
-  if (fits(font, value, templateSizePt, width, height, multiline)) {
+  if (fits(measurer, value, templateSizePt, width, height, multiline)) {
     return { outcome: 'fits', fittedSizePt: templateSizePt, templateSizePt };
   }
 
@@ -540,7 +573,7 @@ function measureFit(
   // also covers the multiline case, where a smaller size changes the wrapping.
   let size = Math.min(templateSizePt, Math.floor(templateSizePt * 10) / 10);
   while (size >= minSize) {
-    if (fits(font, value, size, width, height, multiline)) {
+    if (fits(measurer, value, size, width, height, multiline)) {
       return { outcome: 'shrinks', fittedSizePt: size, templateSizePt };
     }
     size = Math.round((size - 0.5) * 10) / 10;
@@ -579,18 +612,20 @@ export async function checkPdfTemplateFit(
   const form = doc.getForm();
   const minSize = options.minFontSizePt ?? DEFAULT_MIN_FONT_SIZE_PT;
 
-  let font: PDFFont | undefined;
+  let fallback: PDFFont | undefined;
   try {
-    font = form.getDefaultFont();
+    fallback = form.getDefaultFont();
   } catch {
-    return [];
+    // Templates whose default font cannot be resolved are still checked, using
+    // whatever font each field names for itself.
   }
-  if (font === undefined) return [];
 
   const reports: FieldFitReport[] = [];
   for (const field of form.getFields()) {
     if (!(field instanceof PDFTextField)) continue;
     const key = fieldNameToKey(field.getName());
+    const measurer = measurerForField(form, field, fallback);
+    if (measurer === undefined) continue;
 
     // The widest value is the one that decides the field, so only it is
     // measured — and only its row number is reported.
@@ -599,7 +634,7 @@ export async function checkPdfTemplateFit(
     for (const [index, record] of records.entries()) {
       const value = lookup(record, key);
       if (value === undefined || value === '') continue;
-      const measured = measureFit(field, value, font, minSize);
+      const measured = measureFit(field, value, measurer, minSize);
       if (measured === undefined) continue;
       if (worst === undefined || isWorse(measured, worst)) {
         worst = measured;
@@ -651,29 +686,38 @@ function normalizeHeader(key: string): string {
 
 /** Whether a value fits a box at a given size, wrapping if the field allows. */
 function fits(
-  font: PDFFont,
+  measurer: Measurer,
   value: string,
   size: number,
   width: number,
   height: number,
   multiline: boolean,
 ): boolean {
-  const lineHeight = font.heightAtSize(size);
+  const lineHeight = measurer.heightAt(size);
 
   if (!multiline) {
     const singleLine = value.replace(/[\r\n]+/g, ' ');
-    return font.widthOfTextAtSize(singleLine, size) <= width && lineHeight <= height;
+    const measured = measurer.widthOf(singleLine, size);
+    // A font that cannot spell the value will not be the one that draws it, so
+    // it is not the one to judge the fit either.
+    if (measured === undefined) return true;
+    return measured <= width && lineHeight <= height;
   }
 
   let lines = 0;
   for (const paragraph of value.split(/\r?\n/)) {
-    lines += countWrappedLines(font, paragraph, size, width);
+    lines += countWrappedLines(measurer, paragraph, size, width);
   }
   return lines * lineHeight <= height;
 }
 
 /** How many lines a paragraph takes when wrapped to a width. */
-function countWrappedLines(font: PDFFont, text: string, size: number, width: number): number {
+function countWrappedLines(
+  measurer: Measurer,
+  text: string,
+  size: number,
+  width: number,
+): number {
   const words = text.split(/\s+/).filter((word) => word !== '');
   if (words.length === 0) return 1;
 
@@ -681,7 +725,7 @@ function countWrappedLines(font: PDFFont, text: string, size: number, width: num
   let current = '';
   for (const word of words) {
     const candidate = current === '' ? word : `${current} ${word}`;
-    if (font.widthOfTextAtSize(candidate, size) <= width) {
+    if ((measurer.widthOf(candidate, size) ?? 0) <= width) {
       current = candidate;
       continue;
     }
