@@ -5,6 +5,10 @@ import {
   PDFOptionList,
   PDFRadioGroup,
   PDFTextField,
+  PDFArray,
+  PDFDict,
+  PDFName,
+  PDFRef,
   type PDFFont,
 } from 'pdf-lib';
 import { DoclystError, safeErrorSummary } from '../errors.js';
@@ -188,6 +192,7 @@ export async function fillPdf(
         { cause: error },
       );
     }
+    dropFlattenedRemnants(doc);
   }
 
   // Flattening already rasterises each field's appearance stream, so asking
@@ -195,6 +200,52 @@ export async function fillPdf(
   // interactive, appearances must be regenerated or viewers show empty boxes.
   const bytes = await doc.save({ updateFieldAppearances: !flatten });
   return { bytes, replaced, shrunkFields };
+}
+
+/**
+ * Clear what flattening leaves behind.
+ *
+ * `flatten()` draws each field onto the page and deletes the field objects, but
+ * the page's `/Annots` array keeps pointing at the widget annotations that have
+ * just been removed. The result is a structurally invalid PDF — every generated
+ * document carried ten dangling references in testing — which readers report as
+ * a damaged file and strict validators reject outright. On a document being
+ * sent to a candidate or kept as a record, that is not acceptable.
+ *
+ * Only references that no longer resolve are dropped, so genuine annotations
+ * such as links survive. The empty form dictionary goes too: a flattened
+ * document has no interactive form, and leaving one behind keeps a shell of the
+ * field structure in a file that is supposed to be final.
+ */
+function dropFlattenedRemnants(doc: PDFDocument): void {
+  const context = doc.context;
+  const live = new Set<string>();
+  for (const [ref] of context.enumerateIndirectObjects()) live.add(ref.tag);
+
+  for (const page of doc.getPages()) {
+    const annotations = page.node.lookup(PDFName.of('Annots'));
+    if (!(annotations instanceof PDFArray)) continue;
+
+    const kept = annotations
+      .asArray()
+      .filter((entry) => !(entry instanceof PDFRef) || live.has(entry.tag));
+    if (kept.length === annotations.size()) continue;
+
+    if (kept.length === 0) {
+      page.node.delete(PDFName.of('Annots'));
+      continue;
+    }
+    const replacement = PDFArray.withContext(context);
+    for (const entry of kept) replacement.push(entry);
+    page.node.set(PDFName.of('Annots'), replacement);
+  }
+
+  const acroForm = doc.catalog.lookup(PDFName.of('AcroForm'));
+  if (!(acroForm instanceof PDFDict)) return;
+  const fields = acroForm.lookup(PDFName.of('Fields'));
+  if (!(fields instanceof PDFArray) || fields.size() === 0) {
+    doc.catalog.delete(PDFName.of('AcroForm'));
+  }
 }
 
 /** Set one field's value according to its widget type. */
@@ -259,6 +310,45 @@ function fitTextField(
 ): string | undefined {
   if (policy === 'ignore' || value === '' || font === undefined) return undefined;
 
+  const measured = measureFit(field, value, font, minSize);
+  if (measured === undefined || measured.outcome === 'fits') return undefined;
+
+  if (policy === 'error' || measured.outcome === 'overflows') {
+    throw new DoclystError(
+      'INVALID_DATA',
+      measured.outcome === 'overflows'
+        ? `The value for "${key}" cannot be made to fit that field in the PDF template without shrinking it below ${minSize}pt, which would be unreadable. Widen the field, allow more lines, or shorten the value.`
+        : `The value for "${key}" is too long for that field in the PDF template, and a PDF form field hides whatever does not fit. Widen the field, allow more lines, or shorten the value.`,
+      { field: key },
+    );
+  }
+
+  field.setFontSize(measured.fittedSizePt);
+  return key;
+}
+
+/** What would happen to a value placed in a field: the measurement, no writing. */
+export interface FieldFit {
+  readonly outcome: 'fits' | 'shrinks' | 'overflows';
+  /** Size the text would be drawn at. Equals the template's size when it fits. */
+  readonly fittedSizePt: number;
+  /** Size the template asks for. */
+  readonly templateSizePt: number;
+}
+
+/**
+ * Measure a value against the box a field gives it, without changing anything.
+ *
+ * Split out from filling so the same arithmetic answers both questions: what to
+ * do with this value now, and whether the template is big enough for the data
+ * before a single document is written.
+ */
+function measureFit(
+  field: PDFTextField,
+  value: string,
+  font: PDFFont,
+  minSize: number,
+): FieldFit | undefined {
   const widget = field.acroField.getWidgets()[0];
   if (widget === undefined) return undefined;
 
@@ -274,35 +364,125 @@ function fitTextField(
   const declared = readFontSize(field);
   // Size 0 means the field auto-sizes; pdf-lib then picks a size itself, which
   // it will happily take below legibility, so it is checked the same way.
-  const startSize = declared === undefined || declared === 0 ? AUTO_SIZE_CEILING_PT : declared;
+  const templateSizePt =
+    declared === undefined || declared === 0 ? AUTO_SIZE_CEILING_PT : declared;
   const multiline = field.isMultiline();
 
-  if (fits(font, value, startSize, width, height, multiline)) return undefined;
-
-  if (policy === 'error') {
-    throw new DoclystError(
-      'INVALID_DATA',
-      `The value for "${key}" is too long for that field in the PDF template, and a PDF form field hides whatever does not fit. Widen the field, allow more lines, or shorten the value.`,
-      { field: key },
-    );
+  if (fits(font, value, templateSizePt, width, height, multiline)) {
+    return { outcome: 'fits', fittedSizePt: templateSizePt, templateSizePt };
   }
 
-  // Width scales linearly with size, so one step lands close; the loop then
-  // settles it, and covers the multiline case where wrapping changes too.
-  let size = Math.min(startSize, Math.floor(startSize * 10) / 10);
+  // Width scales linearly with size, so stepping down settles quickly; the loop
+  // also covers the multiline case, where a smaller size changes the wrapping.
+  let size = Math.min(templateSizePt, Math.floor(templateSizePt * 10) / 10);
   while (size >= minSize) {
     if (fits(font, value, size, width, height, multiline)) {
-      field.setFontSize(size);
-      return key;
+      return { outcome: 'shrinks', fittedSizePt: size, templateSizePt };
     }
     size = Math.round((size - 0.5) * 10) / 10;
   }
 
-  throw new DoclystError(
-    'INVALID_DATA',
-    `The value for "${key}" cannot be made to fit that field in the PDF template without shrinking it below ${minSize}pt, which would be unreadable. Widen the field, allow more lines, or shorten the value.`,
-    { field: key },
-  );
+  return { outcome: 'overflows', fittedSizePt: minSize, templateSizePt };
+}
+
+/** How a template's fields stand up to the data that will be poured into them. */
+export interface FieldFitReport {
+  /** Placeholder key the field maps to. */
+  readonly field: string;
+  readonly outcome: 'fits' | 'shrinks' | 'overflows';
+  /** Size the text would end up at, in points. */
+  readonly fittedSizePt: number;
+  /** Size the template asks for, in points. */
+  readonly templateSizePt: number;
+  /** 1-based row holding the value that drives this outcome. Never the value. */
+  readonly worstRow: number;
+}
+
+/**
+ * Check a PDF template against the data before generating anything.
+ *
+ * Filling is per-record, so a field that is too narrow for one person in four
+ * hundred surfaces on that row and nowhere else — after the batch has run. This
+ * asks the question up front, for every field, against the widest value the data
+ * actually holds, and reports rows rather than values.
+ */
+export async function checkPdfTemplateFit(
+  template: Uint8Array,
+  records: readonly Readonly<Record<string, string>>[],
+  options: { readonly minFontSizePt?: number } = {},
+): Promise<FieldFitReport[]> {
+  const doc = await loadPdf(template);
+  const form = doc.getForm();
+  const minSize = options.minFontSizePt ?? DEFAULT_MIN_FONT_SIZE_PT;
+
+  let font: PDFFont | undefined;
+  try {
+    font = form.getDefaultFont();
+  } catch {
+    return [];
+  }
+  if (font === undefined) return [];
+
+  const reports: FieldFitReport[] = [];
+  for (const field of form.getFields()) {
+    if (!(field instanceof PDFTextField)) continue;
+    const key = fieldNameToKey(field.getName());
+
+    // The widest value is the one that decides the field, so only it is
+    // measured — and only its row number is reported.
+    let worst: FieldFit | undefined;
+    let worstRow = 0;
+    for (const [index, record] of records.entries()) {
+      const value = lookup(record, key);
+      if (value === undefined || value === '') continue;
+      const measured = measureFit(field, value, font, minSize);
+      if (measured === undefined) continue;
+      if (worst === undefined || isWorse(measured, worst)) {
+        worst = measured;
+        worstRow = index + 1;
+      }
+    }
+
+    if (worst === undefined) continue;
+    reports.push({
+      field: key,
+      outcome: worst.outcome,
+      fittedSizePt: worst.fittedSizePt,
+      templateSizePt: worst.templateSizePt,
+      worstRow,
+    });
+  }
+
+  return reports;
+}
+
+/**
+ * Whether one measurement is a worse outcome than another.
+ *
+ * Severity has to rank ahead of size. Once two values have both bottomed out at
+ * the legibility floor their fitted sizes are equal, so comparing sizes alone
+ * would keep whichever was seen first and report a row that merely shrinks in
+ * place of the row that genuinely does not fit.
+ */
+function isWorse(candidate: FieldFit, incumbent: FieldFit): boolean {
+  const rank = { fits: 0, shrinks: 1, overflows: 2 } as const;
+  if (rank[candidate.outcome] !== rank[incumbent.outcome]) {
+    return rank[candidate.outcome] > rank[incumbent.outcome];
+  }
+  return candidate.fittedSizePt < incumbent.fittedSizePt;
+}
+
+/** Find a record's value for a placeholder key, matching headers loosely. */
+function lookup(record: Readonly<Record<string, string>>, key: string): string | undefined {
+  const wanted = normalizeHeader(key);
+  for (const [header, value] of Object.entries(record)) {
+    if (normalizeHeader(header) === wanted) return value;
+  }
+  return undefined;
+}
+
+function normalizeHeader(key: string): string {
+  return key.trim().replace(/[\s.\-]+/g, '_').toUpperCase();
 }
 
 /** Whether a value fits a box at a given size, wrapping if the field allows. */

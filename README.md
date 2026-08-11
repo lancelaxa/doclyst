@@ -86,6 +86,29 @@ names the fields it had to shrink so the fix can go into the template. Below
 that the value would be present but unreadable, so the record fails instead.
 Errors name the field and never quote the value.
 
+## Keeping a template's exact appearance
+
+Two routes produce PDF, and they trade off differently:
+
+| | DOCX template → PDF | PDF template → PDF |
+|---|---|---|
+| Appearance | Re-typeset; close, not identical | **Exact** — your file is filled, not rebuilt |
+| Logo, fonts, letterhead | Not carried over | Preserved |
+| Tables, images, headers/footers | Not carried over | Preserved |
+| Long values | Reflow naturally | Must fit the field; checked in advance |
+| Editing the template | Word | Word, then add form fields once |
+
+**For anything a candidate, employee or regulator will see, use a PDF
+template.** Design the letter in Word, delete the variable text, save as PDF,
+and add form fields named after your columns. The design survives because Word
+does the layout and Doclyst never re-creates it.
+
+Load the template and the data together and Doclyst measures every field
+against the widest value your data actually contains, before generating
+anything — so a field too narrow for one person in four hundred is found now
+rather than after the letters have gone out. The report names the field and the
+row, never the value.
+
 ## Choosing the output format
 
 A DOCX template produces `.docx` by default and `.pdf` on request; a PDF

@@ -85,7 +85,9 @@ export { renderModelToPdf, type PdfRenderOptions } from './pdf/render.js';
 export {
   fillPdf,
   readPdfFields,
+  checkPdfTemplateFit,
   fieldNameToKey,
+  type FieldFitReport,
   type PdfFillOptions,
   type OverflowPolicy,
   type PdfFillResult,

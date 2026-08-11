@@ -2,6 +2,7 @@ import {
   DoclystError,
   buildZip,
   checkFilenameTemplate,
+  checkPdfTemplateFit,
   detectTemplateKind,
   normalizeKey,
   readCsvRecords,
@@ -96,6 +97,7 @@ const results = byId<HTMLDivElement>('results');
 const templateSummary = byId<HTMLDivElement>('template-summary');
 const dataSummary = byId<HTMLDivElement>('data-summary');
 const filenameWarnings = byId<HTMLDivElement>('filename-warnings');
+const fitReport = byId<HTMLDivElement>('fit-report');
 
 // --- drag and drop -----------------------------------------------------
 
@@ -596,7 +598,60 @@ function ready(): boolean {
 
 function refresh(): void {
   syncFormat();
+  void reportTemplateFit();
   setBusy(false);
+}
+
+/**
+ * Guards against an earlier, slower check overwriting a newer one when the
+ * template or data is swapped twice in quick succession.
+ */
+let fitCheckToken = 0;
+
+/**
+ * Say, before anything is generated, whether every field is big enough for the
+ * data that is going into it.
+ *
+ * A PDF form field hides whatever does not fit, and filling is per-record, so a
+ * field too narrow for one person in four hundred would otherwise surface on
+ * that row alone — after the batch had run and the letters had gone out.
+ */
+async function reportTemplateFit(): Promise<void> {
+  const token = (fitCheckToken += 1);
+  clear(fitReport);
+  if (!loadedTemplate || !loadedData) return;
+  if (loadedTemplate.template.kind !== 'pdf') return;
+
+  let reports;
+  try {
+    reports = await checkPdfTemplateFit(loadedTemplate.template.bytes, loadedData.records);
+  } catch {
+    // A template this cannot be read from will report itself properly when the
+    // batch runs; a status line is not the place to raise it first.
+    return;
+  }
+  if (token !== fitCheckToken) return;
+
+  const tight = reports.filter((report) => report.outcome !== 'fits');
+  if (tight.length === 0) {
+    fitReport.append(
+      el('p', {
+        className: 'ok',
+        text: 'Every field is big enough for the widest value in your data.',
+      }),
+    );
+    return;
+  }
+
+  for (const report of tight) {
+    fitReport.append(
+      warning(
+        report.outcome === 'overflows'
+          ? `${report.field}: too small — the widest value (row ${report.worstRow}) will not fit legibly. Widen this field in the template.`
+          : `${report.field}: tight — row ${report.worstRow} shrinks from ${report.templateSizePt}pt to ${report.fittedSizePt}pt.`,
+      ),
+    );
+  }
 }
 
 // --- presentation helpers ----------------------------------------------

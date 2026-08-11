@@ -53,3 +53,23 @@ export function makeTemplate(
     { mtime: FIXED_TIMESTAMP },
   );
 }
+
+/** A fillable PDF template, for the field-fit checks. */
+export async function makePdfTemplate(
+  fields: readonly { readonly name: string; readonly width: number }[],
+): Promise<Uint8Array> {
+  const { PDFDocument, StandardFonts } = await import('pdf-lib');
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([595, 842]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const form = doc.getForm();
+
+  let y = 700;
+  for (const spec of fields) {
+    form
+      .createTextField(spec.name)
+      .addToPage(page, { x: 40, y, width: spec.width, height: 18, font });
+    y -= 40;
+  }
+  return doc.save();
+}

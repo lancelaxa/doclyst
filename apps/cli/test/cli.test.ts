@@ -8,7 +8,7 @@ import { readDocxText } from '@doclyst/core';
 import { parseArgs, getBoolean, getString } from '../src/args.js';
 import { resolveWithin } from '../src/paths.js';
 import { fillCommand, inspectCommand, type CommandContext } from '../src/commands.js';
-import { makeTemplate } from './helpers/template.js';
+import { makeTemplate, makePdfTemplate } from './helpers/template.js';
 import { pdfText } from './helpers/pdftext.js';
 
 /** Collects CLI output so assertions can check what an operator would see. */
@@ -122,6 +122,53 @@ describe('CLI commands', () => {
 
     it('requires something to inspect', async () => {
       expect(await inspectCommand(parseArgs(['inspect']), makeContext())).toBe(2);
+    });
+  });
+
+  describe('checking a PDF template against the data', () => {
+    const PDF_CSV = 'NAME,ADDRESS\nAisha Rahman,45 Bukit Timah Road #12-07\nWei Lun Tan,Blk 512 Ang Mo Kio Avenue 8 #14-233 Singapore 560512\n';
+
+    it('confirms when every field is big enough', async () => {
+      const pdfPath = join(dir, 'letter.pdf');
+      await writeFile(pdfPath, await makePdfTemplate([
+        { name: 'NAME', width: 300 },
+        { name: 'ADDRESS', width: 400 },
+      ]));
+      await writeFile(dataPath, PDF_CSV);
+
+      const ctx = makeContext();
+      expect(
+        await inspectCommand(parseArgs(['inspect', '--template', pdfPath, '--data', dataPath]), ctx),
+      ).toBe(0);
+      expect(ctx.out.join('\n')).toContain('big enough for the widest value');
+    });
+
+    it('fails inspect when a field cannot fit the data, naming the row', async () => {
+      const pdfPath = join(dir, 'letter.pdf');
+      await writeFile(pdfPath, await makePdfTemplate([
+        { name: 'NAME', width: 300 },
+        { name: 'ADDRESS', width: 80 },
+      ]));
+      await writeFile(dataPath, PDF_CSV);
+
+      const ctx = makeContext();
+      expect(
+        await inspectCommand(parseArgs(['inspect', '--template', pdfPath, '--data', dataPath]), ctx),
+      ).toBe(1);
+      const err = ctx.err.join('\n');
+      expect(err).toContain('ADDRESS');
+      expect(err).toContain('row 2');
+      // The report names rows, never the values behind them.
+      expect(err).not.toContain('Ang Mo Kio');
+    });
+
+    it('says nothing about field sizes for a DOCX template', async () => {
+      const ctx = makeContext();
+      await inspectCommand(
+        parseArgs(['inspect', '--template', templatePath, '--data', dataPath]),
+        ctx,
+      );
+      expect(`${ctx.out.join('\n')}${ctx.err.join('\n')}`).not.toContain('big enough');
     });
   });
 

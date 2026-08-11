@@ -215,6 +215,60 @@ invisible in a summary.
 
 ---
 
+## Keeping your letterhead exactly as designed
+
+Use a **PDF template**. This is the only route that preserves appearance
+exactly, because Doclyst fills your actual PDF — the design is not
+reproduced, it *is* the original file. Fonts, logo, spacing, margins and
+signature block come out identical, every time.
+
+Word templates are more convenient to edit; PDF templates are what you want
+for anything a candidate, employee or regulator will see.
+
+### Making one from your existing Word letter
+
+1. **Open your letter in Word** and delete the placeholder text where the
+   variable values go — the name, the salary, the date. Leave the design alone.
+2. **File → Save as → PDF.** Word does the layout, so the result looks exactly
+   like the Word document. This is the step that preserves the appearance.
+3. **Add form fields** where the values belong, and **name each field after
+   your spreadsheet column** — `FULL_NAME`, `BASIC_SALARY`. Either `NAME` or
+   `{{NAME}}` works as a field name. Any PDF editor will do this: Acrobat
+   (Prepare a Form), LibreOffice Draw (free), or Xournal++.
+4. **Make the boxes generous.** A form field hides anything that does not fit,
+   so size each one for your *longest* value, not a typical one. For addresses,
+   turn on multiline so long ones wrap.
+5. **Check it** — see below. Do this before you use it on real people.
+
+You only do this once. The template is then reusable for every batch.
+
+### Checking the template before you use it
+
+Load the PDF template **and** your spreadsheet into Doclyst. It measures every
+field against the widest value in your actual data and tells you straight away:
+
+- *“Every field is big enough for the widest value in your data.”* — good to go.
+- *“BASIC_SALARY: tight — row 12 shrinks from 11pt to 9pt.”* — nothing will be
+  missing, but that field will look smaller than the rest. Widen it.
+- *“CANDIDATE_ADDRESS: too small — the widest value (row 12) will not fit
+  legibly.”* — **fix this before generating.** Widen the field or enable
+  multiline.
+
+On the command line the same check runs as part of `inspect`, and a field that
+cannot fit exits non-zero so a scheduled job stops rather than sending letters
+with a missing address.
+
+The report names the **field and the row**, never the value, so it is safe to
+paste into a ticket.
+
+### What Doclyst does if something still does not fit
+
+It never silently truncates. A value too wide for its box is shrunk to fit,
+down to 6pt, and the affected fields are listed after the run. Below 6pt the
+text would be there but unreadable, so that row fails and is reported instead.
+
+---
+
 ## Getting PDFs instead of Word files
 
 Set **Output format** to *PDF* in the browser, or pass `--output pdf` on the
@@ -230,6 +284,10 @@ Word file — line breaks and spacing may fall differently.
 engine, and none runs inside a browser tab. The only other way to do it would
 be to upload your documents to a conversion service — which is the one thing
 this tool is built never to do.
+
+**If appearance matters, use a PDF template instead** (see *Keeping your
+letterhead exactly as designed*, above). That route is exact, because Doclyst
+fills your real PDF rather than rebuilding it.
 
 **Two things to check before you run a batch as PDF:**
 

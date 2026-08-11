@@ -3,6 +3,7 @@ import { basename, extname } from 'node:path';
 import {
   DoclystError,
   buildZip,
+  checkPdfTemplateFit,
   detectTemplateKind,
   escapeCsvValue,
   readCsvRecords,
@@ -84,6 +85,38 @@ export async function inspectCommand(args: ParsedArgs, ctx: CommandContext): Pro
     }
     ctx.log('');
     ctx.log('Every template placeholder has a matching column.');
+  }
+
+  // The second most useful thing: whether the boxes are big enough for the
+  // data. A field that is too narrow for one person in four hundred otherwise
+  // shows up on that row and nowhere else, after the batch has run.
+  if (templatePath && dataPath) {
+    const template = await loadTemplate(templatePath);
+    if (template.kind === 'pdf') {
+      const { records } = await loadRecords(dataPath, getString(args, 'sheet'));
+      const reports = await checkPdfTemplateFit(template.bytes, records);
+      const tight = reports.filter((report) => report.outcome !== 'fits');
+
+      ctx.log('');
+      if (tight.length === 0) {
+        ctx.log('Every field is big enough for the widest value in the data.');
+      } else {
+        for (const report of tight) {
+          const detail =
+            report.outcome === 'overflows'
+              ? `too small — the widest value (row ${report.worstRow}) will not fit legibly`
+              : `tight — row ${report.worstRow} shrinks from ${report.templateSizePt}pt to ${report.fittedSizePt}pt`;
+          ctx.error(`  ${report.field}: ${detail}`);
+        }
+        const blocking = tight.some((report) => report.outcome === 'overflows');
+        ctx.error(
+          blocking
+            ? 'Widen the fields above in the template before generating.'
+            : 'Documents will be complete, but widening those fields makes them read evenly.',
+        );
+        if (blocking) return 1;
+      }
+    }
   }
 
   return 0;

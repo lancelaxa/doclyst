@@ -214,6 +214,58 @@ describe('the built page', () => {
     await page.close();
   });
 
+  describe('checking a PDF template against the data', () => {
+    async function loadPdfTemplate(
+      page: Page,
+      fields: readonly { readonly name: string; readonly width: number }[],
+    ): Promise<void> {
+      await page.setInputFiles('#template-input', {
+        name: 'letter.pdf',
+        mimeType: 'application/pdf',
+        buffer: Buffer.from(await makePdfTemplate(fields)),
+      });
+      await page.setInputFiles('#data-input', {
+        name: 'staff.csv',
+        mimeType: 'text/csv',
+        buffer: Buffer.from(CSV),
+      });
+    }
+
+    it('confirms when every field is big enough for the data', async () => {
+      const { page } = await openPage();
+      await loadPdfTemplate(page, [{ name: 'FULL_NAME', width: 300 }]);
+      await expect.poll(() => page.textContent('#fit-report')).toContain('big enough');
+      await page.close();
+    });
+
+    it('names a field too narrow for the data, and the row that proves it', async () => {
+      const { page } = await openPage();
+      await loadPdfTemplate(page, [{ name: 'FULL_NAME', width: 34 }]);
+      const report = await expect
+        .poll(() => page.textContent('#fit-report'))
+        .toContain('FULL_NAME');
+      void report;
+      expect(await page.textContent('#fit-report')).toMatch(/row \d/);
+      await page.close();
+    });
+
+    it('never puts a value in the report, only a row number', async () => {
+      const { page } = await openPage();
+      await loadPdfTemplate(page, [{ name: 'FULL_NAME', width: 34 }]);
+      await expect.poll(() => page.textContent('#fit-report')).toContain('FULL_NAME');
+      expect(await page.textContent('#fit-report')).not.toContain('Aisha');
+      await page.close();
+    });
+
+    it('says nothing about field sizes for a DOCX template', async () => {
+      const { page } = await openPage();
+      await loadInputs(page);
+      await expect.poll(() => page.textContent('#data-summary')).toContain('3 rows');
+      expect(await page.textContent('#fit-report')).toBe('');
+      await page.close();
+    });
+  });
+
   describe('PDF output', () => {
     it('writes PDFs, named .pdf, when PDF is chosen', async () => {
       const { page } = await openPage();

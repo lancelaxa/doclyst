@@ -54,18 +54,29 @@ export function makeTemplate(
   );
 }
 
-/** A one-page PDF template with a form field, to test the PDF-only path. */
-export async function makePdfTemplate(): Promise<Uint8Array> {
+/**
+ * A one-page PDF template with form fields, to test the PDF-only path.
+ *
+ * Widths are settable so a field can be made deliberately too narrow for the
+ * data, which is what the fit check exists to catch.
+ */
+export async function makePdfTemplate(
+  fields: readonly { readonly name: string; readonly width: number }[] = [
+    { name: 'FULL_NAME', width: 300 },
+  ],
+): Promise<Uint8Array> {
   const { PDFDocument, StandardFonts } = await import('pdf-lib');
   const doc = await PDFDocument.create();
-  const page = doc.addPage([400, 600]);
+  const page = doc.addPage([595, 842]);
   const font = await doc.embedFont(StandardFonts.Helvetica);
-  doc.getForm().createTextField('FULL_NAME').addToPage(page, {
-    x: 40,
-    y: 550,
-    width: 300,
-    height: 20,
-    font,
-  });
+  const form = doc.getForm();
+
+  let y = 700;
+  for (const spec of fields) {
+    form
+      .createTextField(spec.name)
+      .addToPage(page, { x: 40, y, width: spec.width, height: 20, font });
+    y -= 40;
+  }
   return doc.save();
 }
