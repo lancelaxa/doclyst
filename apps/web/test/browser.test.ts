@@ -254,6 +254,30 @@ describe('the built page', () => {
       await page.close();
     });
 
+    it('stops inviting you to prepare once it is prepared', async () => {
+      const { page } = await openPage();
+      await loadPlaceholderPdf(page);
+      await page.click('#prepare');
+      await expect.poll(() => page.textContent('#prepare-result')).toContain('Placed');
+
+      expect(await page.locator('#prepare').isVisible()).toBe(false);
+      expect(await page.locator('#prepare-intro').isVisible()).toBe(false);
+      expect(await page.locator('#download-prepared').isVisible()).toBe(true);
+      await page.close();
+    });
+
+    it('offers to prepare again after a different template is loaded', async () => {
+      const { page } = await openPage();
+      await loadPlaceholderPdf(page);
+      await page.click('#prepare');
+      await expect.poll(() => page.textContent('#prepare-result')).toContain('Placed');
+
+      await loadPlaceholderPdf(page);
+      await expect.poll(() => page.locator('#prepare').isVisible()).toBe(true);
+      expect(await page.locator('#download-prepared').isVisible()).toBe(false);
+      await page.close();
+    });
+
     it('generates documents straight from the prepared template', async () => {
       const { page } = await openPage();
       await loadPlaceholderPdf(page);

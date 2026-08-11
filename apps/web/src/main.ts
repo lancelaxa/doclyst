@@ -101,6 +101,7 @@ const filenameWarnings = byId<HTMLDivElement>('filename-warnings');
 const fitReport = byId<HTMLDivElement>('fit-report');
 const preparePanel = byId<HTMLDivElement>('prepare-panel');
 const prepareButton = byId<HTMLButtonElement>('prepare');
+const prepareIntro = byId<HTMLParagraphElement>('prepare-intro');
 const downloadPreparedButton = byId<HTMLButtonElement>('download-prepared');
 const prepareResult = byId<HTMLDivElement>('prepare-result');
 
@@ -212,6 +213,8 @@ templateInput.addEventListener('change', () => {
     preparedTemplate = undefined;
     clear(prepareResult);
     downloadPreparedButton.hidden = true;
+    prepareButton.hidden = false;
+    prepareIntro.hidden = false;
     preparePanel.hidden = !(template.kind === 'pdf' && fields.length === 0);
   });
 });
@@ -232,7 +235,11 @@ prepareButton.addEventListener('click', () => {
       bytes: result.bytes,
       filename: loaded.filename.replace(/\.pdf$/i, '') + '-template.pdf',
     };
+    // The invitation and its button have done their job; leaving them would
+    // read as though nothing had happened.
     downloadPreparedButton.hidden = false;
+    prepareButton.hidden = true;
+    prepareIntro.hidden = true;
 
     replaceChildren(
       templateSummary,

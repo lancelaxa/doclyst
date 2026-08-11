@@ -60,7 +60,7 @@
           </span>
           <div class="brand-text">
             <h1>Doclyst</h1>
-            <p>Fill DOCX and PDF templates from a spreadsheet — one document per row.</p>
+            <p>One document per row, from a template and a spreadsheet.</p>
           </div>
         </div>
 
@@ -73,9 +73,9 @@
             </svg>
           </span>
           <p>
-            <strong>Everything happens on this device.</strong> Your template, your
-            spreadsheet and every value in it stay in this browser tab. Nothing is
-            uploaded — this page is blocked from making network requests at all.
+            <strong>Nothing leaves this device.</strong> Your files and every value in
+            them stay in this tab — the page is blocked from making network requests
+            at all.
           </p>
         </div>
       </header>
@@ -87,8 +87,13 @@
             <div>
               <h2 id="step-template">Template</h2>
               <p class="hint">
-                A <code>.docx</code> with <code>{{PLACEHOLDERS}}</code> in the text, or a
-                <code>.pdf</code> with form fields named after your columns.
+                A <code>.docx</code> or <code>.pdf</code> with
+                <code>{{PLACEHOLDERS}}</code> named after your columns.
+              </p>
+              <p class="hint">
+                <strong>To keep your letterhead exactly:</strong> write the
+                placeholders in Word, save as PDF, and drop that here — Doclyst adds
+                the fields for you.
               </p>
             </div>
           </header>
@@ -108,15 +113,14 @@
           <div id="template-summary" class="summary" role="status" aria-live="polite"></div>
 
           <div id="prepare-panel" class="prepare" hidden>
-            <p class="hint">
-              This PDF still has <code>{{PLACEHOLDERS}}</code> written into it. Doclyst
-              can put a fillable field where each one sits, leaving the rest of the
-              page exactly as designed.
+            <p class="hint" id="prepare-intro">
+              This PDF still has <code>{{PLACEHOLDERS}}</code> in it. Each becomes a
+              fillable field; the rest of the page is untouched.
             </p>
             <div class="actions">
               <button type="button" id="prepare" class="btn">Prepare this template</button>
               <button type="button" id="download-prepared" class="btn" hidden>
-                Download the prepared template
+                Download template
               </button>
             </div>
             <div id="prepare-result" class="warnings" role="status" aria-live="polite"></div>
@@ -129,7 +133,9 @@
             <div>
               <h2 id="step-data">Data</h2>
               <p class="hint">
-                A <code>.csv</code> or <code>.xlsx</code> whose header row names the fields.
+                A <code>.csv</code> or <code>.xlsx</code>. The header row names the
+                fields — a <code>Full Name</code> column fills
+                <code>{{FULL_NAME}}</code>.
               </p>
             </div>
           </header>
@@ -160,7 +166,7 @@
             <span class="step-num" aria-hidden="true">3</span>
             <div>
               <h2 id="step-options">Options</h2>
-              <p class="hint">Sensible defaults — adjust only if you need to.</p>
+              <p class="hint">Sensible defaults. Change only what you need.</p>
             </div>
           </header>
 
@@ -175,10 +181,9 @@
             />
           </div>
           <p class="hint indent">
-            Leave blank to number files by position. A filename is visible without
-            opening the file, so naming documents after an identifier discloses it to
-            anyone who can see the folder. Use <code>{{FIELD}}</code> and
-            <code>{{ROW}}</code>.
+            Blank numbers them <code>document-0001</code>. Use <code>{{FIELD}}</code>
+            or <code>{{ROW}}</code> to name from your data — but a filename is readable
+            without opening the file, so avoid identifiers.
           </p>
           <div id="filename-warnings" class="warnings" role="status" aria-live="polite"></div>
 
@@ -190,10 +195,9 @@
             </select>
           </div>
           <p class="hint indent" id="format-hint">
-            PDF is produced by re-typesetting the text, not by converting Word's
-            layout, so the wording is exact but the appearance may differ.
-            Tables, images and automatic numbering are not carried over — you
-            will be told before generating if the template uses them.
+            A PDF template gives an exact copy. PDF from a <code>.docx</code>
+            re-typesets the text — wording exact, appearance approximate — and warns
+            you if anything cannot be carried over.
           </p>
           <div id="format-warnings" class="warnings" role="status" aria-live="polite"></div>
 
@@ -213,11 +217,11 @@
             </label>
             <label class="check">
               <input type="checkbox" id="scrub-metadata" checked />
-              <span>Remove template author and company metadata from output</span>
+              <span>Strip author and company metadata from the output</span>
             </label>
             <label class="check">
               <input type="checkbox" id="flatten-pdf" checked />
-              <span>Flatten PDF form fields so values cannot be edited back out</span>
+              <span>Flatten PDF fields, so values cannot be edited back out</span>
             </label>
           </div>
         </section>
@@ -227,7 +231,7 @@
             <span class="step-num" aria-hidden="true">4</span>
             <div>
               <h2 id="step-generate">Generate</h2>
-              <p class="hint">One document per row, made here on your device.</p>
+              <p class="hint">One document per row. Open one before you send the batch.</p>
             </div>
           </header>
 
@@ -244,10 +248,9 @@
           </div>
 
           <p class="hint" id="streaming-hint" hidden>
-            “Save to folder” and “Save as ZIP” write each document to disk as it is
-            made, so memory stays flat no matter how large the batch. Your browser
-            asks where to save; this page can only write to the place you pick, and
-            only for this visit.
+            “Save to folder” and “Save as ZIP” write each document straight to disk,
+            so memory stays flat however large the batch. This page can write only
+            where you choose, and only for this visit.
           </p>
 
           <div class="progress" id="progress" hidden>
