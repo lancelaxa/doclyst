@@ -223,6 +223,52 @@ describe('the built page', () => {
     await page.close();
   });
 
+  describe('batch size', () => {
+    it('reports the total size of the generated documents', async () => {
+      const { page } = await openPage();
+      await loadInputs(page);
+      await page.click('#generate');
+      await expect.poll(() => page.textContent('#results')).toContain('Total size:');
+      await page.close();
+    });
+
+    it('does not warn about size for an ordinary batch', async () => {
+      const { page } = await openPage();
+      await loadInputs(page);
+      await page.click('#generate');
+      await expect.poll(() => page.textContent('#results')).toContain('documents ready');
+      expect(await page.textContent('#results')).not.toContain('may fail to save');
+      await page.close();
+    });
+
+    it('handles a batch of 400 records', async () => {
+      // The scale this tool exists for. Asserts the page stays functional and
+      // every row produces its own correctly-named document.
+      const rows = Array.from(
+        { length: 400 },
+        (_, i) => `Person ${i},${3000 + i},EMP-${String(i).padStart(4, '0')}`,
+      ).join('\n');
+      const { page } = await openPage();
+      await page.setInputFiles('#template-input', {
+        name: 'offer.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        buffer: Buffer.from(makeTemplate(['FULL_NAME', 'BASIC_SALARY'])),
+      });
+      await page.setInputFiles('#data-input', {
+        name: 'staff.csv',
+        mimeType: 'text/csv',
+        buffer: Buffer.from(`Full Name,Basic Salary,Staff ID\n${rows}\n`),
+      });
+      await page.click('#generate');
+
+      await expect.poll(() => page.textContent('#results'), { timeout: 60_000 })
+        .toContain('400 documents ready');
+      expect(await page.locator('.file-list li').count()).toBe(400);
+      expect(await page.textContent('.file-list')).toContain('document-0400.docx');
+      await page.close();
+    }, 90_000);
+  });
+
   describe('nothing leaves the device', () => {
     it('makes no off-origin request while generating a whole batch', async () => {
       // The load-bearing test for the product's central claim.

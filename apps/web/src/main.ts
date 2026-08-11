@@ -29,6 +29,17 @@ import './app.css';
  * service worker — so closing the tab disposes of everything.
  */
 
+/**
+ * Total output size above which a single ZIP becomes unreliable in a browser.
+ *
+ * Measured in Chromium: a batch whose documents came to roughly 570 MB left
+ * the tab holding about 1.2 GB once the archive was built, and the download
+ * was cancelled silently. A plain blob of the same size on an idle page
+ * downloaded fine, so the limit is memory pressure rather than any size cap —
+ * which makes it device-dependent, hence a warning rather than a refusal.
+ */
+const LARGE_OUTPUT_WARNING_BYTES = 300 * 1024 * 1024;
+
 interface LoadedTemplate {
   readonly template: Template;
   readonly filename: string;
@@ -222,6 +233,9 @@ function showResults(result: BatchResult): void {
   );
 
   if (result.documents.length > 0) {
+    const totalBytes = result.documents.reduce((sum, document) => sum + document.bytes.length, 0);
+    nodes.push(el('p', { className: 'fields', text: `Total size: ${formatBytes(totalBytes)}` }));
+
     const zipButton = el('button', { className: 'primary', text: 'Download all as ZIP' });
     zipButton.addEventListener('click', () => {
       const archive = buildZip(
@@ -230,6 +244,19 @@ function showResults(result: BatchResult): void {
       downloadBytes(archive, 'doclyst-documents.zip');
     });
     nodes.push(zipButton);
+
+    // Browsers cancel a blob download once the tab is under enough memory
+    // pressure, and they do it silently — the click simply does nothing, with
+    // no error to catch. Saying so up front beats leaving someone clicking a
+    // button that will never respond. Individual downloads are unaffected
+    // because each document is small.
+    if (totalBytes > LARGE_OUTPUT_WARNING_BYTES) {
+      nodes.push(
+        warning(
+          `These documents total ${formatBytes(totalBytes)}. A ZIP this large may fail to save — browsers cancel very large downloads without reporting it. Download the files individually below, or use the command-line tool, which writes straight to disk and has no such limit.`,
+        ),
+      );
+    }
 
     const list = el('ul', { className: 'file-list' });
     for (const document of result.documents) {
@@ -280,6 +307,14 @@ function summaryLine(text: string): HTMLElement {
 
 function fieldList(label: string, fields: readonly string[]): HTMLElement {
   return el('p', { className: 'fields', text: `${label} (${fields.length}): ${fields.join(', ')}` });
+}
+
+/** Human-readable byte size, for reporting how big a batch turned out. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 function warning(message: string): HTMLElement {

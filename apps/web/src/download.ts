@@ -20,9 +20,15 @@ function mimeTypeFor(filename: string): string {
 
 /** Trigger a download of `bytes` under `filename`. */
 export function downloadBytes(bytes: Uint8Array, filename: string): void {
-  // `slice()` detaches from any larger buffer so the Blob owns exactly these
-  // bytes, and Blob wants a plain ArrayBuffer rather than a typed-array view.
-  const blob = new Blob([bytes.slice().buffer as ArrayBuffer], { type: mimeTypeFor(filename) });
+  // The array is handed to Blob directly rather than copied first. Blob accepts
+  // a typed-array view, and it takes its own snapshot of the bytes — so an
+  // explicit copy just doubles peak memory, which for a ZIP of several hundred
+  // documents is hundreds of megabytes that can push a tab over its heap limit.
+  // The cast narrows `Uint8Array<ArrayBufferLike>` to the `ArrayBuffer`-backed
+  // form `BlobPart` requires. Nothing here ever produces a SharedArrayBuffer —
+  // the engine returns plain arrays — so the wider type is only a limitation of
+  // the standard library's signature.
+  const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], { type: mimeTypeFor(filename) });
   const url = URL.createObjectURL(blob);
 
   const link = document.createElement('a');
