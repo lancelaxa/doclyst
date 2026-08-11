@@ -18,6 +18,10 @@ throughout, not just the marketing.
 > processing, your retention practices and how you distribute what you produce.
 > See [PRIVACY.md](./PRIVACY.md) for exactly what the tool does and does not do.
 
+**New here?** [**GUIDE.md**](./GUIDE.md) is the step-by-step walkthrough —
+preparing a template, preparing a spreadsheet, generating the documents, and
+what to do when something goes wrong. This README is the technical overview.
+
 ## Two ways to use it
 
 **In your browser** — a local page; nothing is uploaded. Drag a template and a
