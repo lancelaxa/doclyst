@@ -56,6 +56,19 @@ describe('sanitizeFilename', () => {
     expect(sanitizeFilename('COM1', '.pdf')).toBe('COM1_file.pdf');
   });
 
+  it('escapes a reserved device name that carries a suffix', () => {
+    // Windows matches the device name against the part before the first dot,
+    // so "CON.log" is reserved just as "CON" is.
+    expect(sanitizeFilename('CON.log', '.pdf')).toBe('CON_file.log.pdf');
+    expect(sanitizeFilename('nul.txt', '.pdf')).toBe('nul_file.txt.pdf');
+    expect(sanitizeFilename('PRN.data', '.pdf')).toBe('PRN_file.data.pdf');
+  });
+
+  it('leaves a name that merely starts with reserved letters alone', () => {
+    expect(sanitizeFilename('CONTRACT', '.pdf')).toBe('CONTRACT.pdf');
+    expect(sanitizeFilename('AUXILIARY', '.pdf')).toBe('AUXILIARY.pdf');
+  });
+
   it('truncates long names while keeping the extension', () => {
     const result = sanitizeFilename('x'.repeat(500), '.docx');
     expect(result.length).toBeLessThanOrEqual(120);

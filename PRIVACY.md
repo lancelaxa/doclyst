@@ -82,6 +82,14 @@ This matters because the default umask on many systems produces `0644` files,
 which on a shared machine, an NFS mount or a server makes a folder of payslips
 readable by every account on the box.
 
+Every output file is created exclusively (`O_CREAT | O_EXCL`) rather than
+opened for writing. On a shared machine that closes two gaps at once: a symlink
+planted in the output directory can no longer redirect a generated document
+over some other file, and there is no window between checking whether a path
+exists and writing to it. `--force` unlinks the existing entry first, which
+removes a symlink itself rather than following it, and then still creates
+exclusively — so losing the race means failing, not writing through.
+
 Note that permissions on the *source* spreadsheet and the ZIP you send onward
 are yours to manage.
 
@@ -151,6 +159,8 @@ Both the template and the data file are treated as untrusted.
 | Path traversal in a template's archive entries | Entry names are validated; `..`, absolute and drive-letter paths are rejected |
 | Path traversal via a generated filename | Sanitized in the engine, then re-checked against the output root before writing |
 | Traversal written *into* our ZIP | Entry names re-validated at archive-build time |
+| Symlink planted in the output directory | Files are created with `O_EXCL`, which refuses to follow a symlink; `--force` unlinks the link itself, never its target |
+| Reserved Windows device names | Escaped, including suffixed forms such as `CON.log` |
 | Wrong file type | Templates identified by magic bytes, not by file extension |
 | Encrypted PDF silently downgraded | Rejected, rather than filled and saved without its protection |
 | Spreadsheet formulas | Never evaluated; only cached results are read |

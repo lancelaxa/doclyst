@@ -53,8 +53,12 @@ export function sanitizeFilename(input: string, extension: string): string {
 
   if (name === '') name = 'document';
 
-  if (RESERVED_NAMES.has(name.toUpperCase())) {
-    name = `${name}_file`;
+  // Windows matches a device name against the part before the *first* dot, so
+  // "CON.log" is as reserved as "CON" and must be escaped too.
+  const firstDot = name.indexOf('.');
+  const stem = firstDot >= 0 ? name.slice(0, firstDot) : name;
+  if (RESERVED_NAMES.has(stem.toUpperCase())) {
+    name = `${stem}_file${firstDot >= 0 ? name.slice(firstDot) : ''}`;
   }
 
   const suffix = extension.startsWith('.') ? extension : `.${extension}`;

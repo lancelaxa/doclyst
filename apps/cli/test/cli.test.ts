@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -193,6 +193,57 @@ describe('CLI commands', () => {
         expect(await fillCommand(fillArgs(), ctx)).toBe(1);
         expect(ctx.err.join('\n')).toMatch(/Refusing to overwrite/);
         expect(await readFile(join(outDir, 'document-0001.docx'), 'utf8')).toBe('existing');
+      });
+
+      it('does not write through a symlink planted in the output directory', async () => {
+        // Without this, anyone who can create files in the output directory
+        // could redirect a generated document over an arbitrary file.
+        const outside = join(dir, 'outside.txt');
+        await writeFile(outside, 'untouched');
+        await mkdir(outDir, { recursive: true });
+        await symlink(outside, join(outDir, 'document-0001.docx'));
+
+        const ctx = makeContext();
+        expect(await fillCommand(fillArgs(), ctx)).toBe(1);
+        expect(await readFile(outside, 'utf8')).toBe('untouched');
+      });
+
+      it('replaces the symlink itself, not its target, under --force', async () => {
+        const outside = join(dir, 'outside.txt');
+        await writeFile(outside, 'untouched');
+        await mkdir(outDir, { recursive: true });
+        await symlink(outside, join(outDir, 'document-0001.docx'));
+
+        expect(await fillCommand(fillArgs('--force'), makeContext())).toBe(0);
+        // The target survives; the link has become a real generated document.
+        expect(await readFile(outside, 'utf8')).toBe('untouched');
+        await expect(readlink(join(outDir, 'document-0001.docx'))).rejects.toThrow();
+        expect(
+          readDocxText(new Uint8Array(await readFile(join(outDir, 'document-0001.docx')))),
+        ).toContain('Aisha Rahman');
+      });
+
+      it('refuses to overwrite an existing ZIP', async () => {
+        const zipPath = join(dir, 'out.zip');
+        await writeFile(zipPath, 'existing');
+        const ctx = makeContext();
+        expect(
+          await fillCommand(
+            parseArgs(['fill', '--template', templatePath, '--data', dataPath, '--zip', zipPath]),
+            ctx,
+          ),
+        ).toBe(1);
+        expect(await readFile(zipPath, 'utf8')).toBe('existing');
+      });
+
+      it('refuses to overwrite an existing manifest', async () => {
+        await mkdir(outDir, { recursive: true });
+        await writeFile(join(outDir, 'manifest.csv'), 'existing');
+        const ctx = makeContext();
+        // The documents write cleanly; the manifest is what collides.
+        expect(await fillCommand(fillArgs(), ctx)).toBe(1);
+        expect(ctx.err.join('\n')).toMatch(/Refusing to overwrite an existing manifest/);
+        expect(await readFile(join(outDir, 'manifest.csv'), 'utf8')).toBe('existing');
       });
 
       it('replaces when --force is given', async () => {
