@@ -24,10 +24,11 @@ what to do when something goes wrong. This README is the technical overview.
 
 ## Two ways to use it
 
-**In your browser, with nothing installed** — download `doclyst.html` from the
-latest [Actions](../../actions) run (artifact `doclyst-single-file`) and
-double-click it, or open the GitHub Pages URL if it is enabled. One file, no
-server, works offline. See [GUIDE.md](./GUIDE.md#opening-doclyst-no-terminal-needed).
+**In your browser, with nothing installed** — open
+**https://lancelaxa.github.io/doclyst/** (public link), or download
+`doclyst.html` from the latest [Actions](../../actions) run (artifact
+`doclyst-single-file`) and double-click it. One file, no server, works offline.
+See [GUIDE.md](./GUIDE.md#opening-doclyst-no-terminal-needed).
 
 **In your browser, from source** — a local page; nothing is uploaded. Drag a
 template and a spreadsheet in, choose how files should be named, and generate.
@@ -215,8 +216,8 @@ mismatch surfaces nowhere else.
 
 `.github/workflows/pages.yml` builds, typechecks and tests on every push, then
 publishes the site to GitHub Pages and attaches `doclyst.html` as a downloadable
-artifact. Pages needs enabling once, in Settings → Pages → Source: GitHub
-Actions.
+artifact. The deploy step is non-blocking: if Pages is ever disabled it writes a
+note saying what to re-enable rather than reddening a build that passed.
 
 ## The browser interface
 

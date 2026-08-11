@@ -43,25 +43,29 @@ stick. It never needs updating to keep working, and it works offline.
 
 ### Option B — a link you can bookmark
 
-**This needs one setting turned on first.** Go to the repository's
-**Settings → Pages**, and under *Source* choose **GitHub Actions**. Then
-re-run the latest workflow from the Actions tab. Until that is done the
-deploy step is skipped with a note explaining why, and Option A above still
-works exactly as described.
+The app is published at:
 
-Once enabled, the app is published at:
+**https://lancelaxa.github.io/doclyst/**
 
-```
-https://<owner>.github.io/<repository>/
-```
+Open it in any browser — no sign-in, no download, nothing to install. Bookmark
+it and share it with colleagues. It updates automatically whenever the project
+is updated.
 
-For this repository that is `https://lancelaxa.github.io/doclyst/`.
+> **This link is public.** The repository is public, so anyone with the address
+> can open the page. That is safe for the tool itself — it is a static page
+> holding no data, and it cannot make network requests — but the link is not
+> restricted to your team. If you would rather it were, share the
+> `doclyst.html` file from Option A directly instead.
 
-Bookmark it and share it with colleagues. **Hosting the page does not mean
-hosting your data**: the page is downloaded to your browser and does all its
-work there. Its Content-Security-Policy blocks it from making network requests
-at all, so it could not send your spreadsheet anywhere even if it tried. Once
-loaded, you can disconnect from the internet and it keeps working.
+**Hosting the page does not mean hosting your data.** The page is downloaded to
+your browser and does all its work there. Its Content-Security-Policy blocks it
+from making network requests at all, so it could not send your spreadsheet
+anywhere even if it tried. Once loaded, you can disconnect from the internet
+and it keeps working.
+
+*(If the link ever stops working, it is served by GitHub Pages: check
+Settings → Pages → Source is set to **GitHub Actions**, then re-run the latest
+workflow from the Actions tab.)*
 
 ### Option C — build it yourself
 
