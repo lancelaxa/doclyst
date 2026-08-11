@@ -260,6 +260,26 @@ describe('preparePdfTemplate', () => {
     expect(result.fields[0]!.width).toBeGreaterThan(plain.fields[0]!.width * 2);
   });
 
+  it('recognises a template it has already prepared', async () => {
+    // The likeliest way to reach "no placeholders" is to feed back the prepared
+    // file, and the generic message would send someone hunting for a fault in a
+    // source document that has nothing wrong with it.
+    const prepared = await preparePdfTemplate(await letter(['Dear {{CANDIDATE_NAME}},']));
+    const error = await preparePdfTemplate(prepared.bytes).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(DoclystError);
+    expect((error as DoclystError).message).toContain('already prepared');
+    expect((error as DoclystError).message).toContain('ready to fill');
+  });
+
+  it('still gives the plain message for a PDF that simply has no placeholders', async () => {
+    const error = await preparePdfTemplate(await letter(['An ordinary letter.'])).catch(
+      (e: unknown) => e,
+    );
+    expect((error as DoclystError).message).toContain('No {{PLACEHOLDER}} text was found');
+    expect((error as DoclystError).message).not.toContain('already prepared');
+  });
+
   it('rejects a file that is not a PDF', async () => {
     await expect(preparePdfTemplate(new Uint8Array([1, 2, 3, 4]))).rejects.toThrow(DoclystError);
   });

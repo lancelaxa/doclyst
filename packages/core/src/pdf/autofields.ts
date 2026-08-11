@@ -104,6 +104,8 @@ export async function preparePdfTemplate(
   }
 
   const existing = new Set(doc.getForm().getFields().map((field) => field.getName()));
+  /** Fields the template arrived with, kept for the "already prepared" case. */
+  const alreadyPresent = new Set(existing);
   const widthFactor = options.widthFactor ?? 1;
 
   const fields: PreparedField[] = [];
@@ -161,6 +163,15 @@ export async function preparePdfTemplate(
   });
 
   if (fields.length === 0 && skipped.length === 0) {
+    // The likeliest reason to find no placeholders is that this file has
+    // already been through here. Saying so beats sending someone to look for a
+    // fault in a source document that has nothing wrong with it.
+    if (alreadyPresent.size > 0) {
+      throw new DoclystError(
+        'UNSUPPORTED_TEMPLATE',
+        `This PDF has no {{PLACEHOLDER}} text but does have ${alreadyPresent.size} form field(s), so it looks like a template that was already prepared. It is ready to fill as it is. To change it, edit the original document, save it as PDF again, and prepare that.`,
+      );
+    }
     throw new DoclystError(
       'UNSUPPORTED_TEMPLATE',
       'No {{PLACEHOLDER}} text was found in this PDF. Check that the placeholders are typed into the document as ordinary text, and that the PDF is not a scan.',

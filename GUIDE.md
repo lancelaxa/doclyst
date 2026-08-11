@@ -277,6 +277,33 @@ or Xournal++. Name each field after your spreadsheet column; either `NAME` or
 `{{NAME}}` works. Make the boxes generous, and turn on multiline for addresses
 so long ones wrap. Doclyst fills a hand-made template exactly the same way.
 
+### Changing a template later
+
+**Keep the Word document. It is the master.** The prepared PDF is built from
+it, the way a compiled file is built from source — you edit the Word file and
+prepare again, never the PDF.
+
+To change the wording, add a clause, or add a new field:
+
+1. Edit the **Word** document. To add a field, type a new `{{PLACEHOLDER}}`
+   named after the spreadsheet column that will fill it.
+2. Save as PDF again.
+3. Prepare it again, and use the new template.
+4. Load it with your spreadsheet — Doclyst re-checks that every placeholder has
+   a matching column and that every field is big enough. A column you have not
+   added yet shows up here, not halfway through a batch.
+
+Field names come from the placeholders, so as long as you do not rename one,
+your existing spreadsheet keeps working. Rename a placeholder and you must
+rename the column to match — Doclyst will tell you if you forget.
+
+If you feed a prepared template back in by mistake, Doclyst recognises it and
+says so rather than reporting a fault in your document.
+
+**Keep the old template until the new one is checked.** Name them so you can
+tell which is which — `offer-letter-2026-08.pdf` — and you can always go back
+to the version a batch was actually produced with.
+
 ### Checking the template before you use it
 
 Load the PDF template **and** your spreadsheet into Doclyst. It measures every
