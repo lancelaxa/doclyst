@@ -323,6 +323,79 @@ describe('the built page', () => {
     });
   });
 
+describe('choosing files', () => {
+    it('marks a drop zone as loaded and names the file', async () => {
+      const { page } = await openPage();
+      await loadInputs(page);
+      await expect.poll(() => page.textContent('#template-drop')).toContain('offer.docx');
+      expect(await page.locator('#template-drop.loaded').count()).toBe(1);
+      expect(await page.locator('#data-drop.loaded').count()).toBe(1);
+      await page.close();
+    });
+
+    it('returns a zone to its prompt when the file is cleared', async () => {
+      const { page } = await openPage();
+      await loadInputs(page);
+      await expect.poll(() => page.locator('#template-drop.loaded').count()).toBe(1);
+
+      await page.setInputFiles('#template-input', []);
+      await expect.poll(() => page.locator('#template-drop.loaded').count()).toBe(0);
+      expect(await page.textContent('#template-drop')).toContain('Choose a template');
+      await page.close();
+    });
+
+    it('accepts a file dropped onto the zone', async () => {
+      // Dropping must land on the same code path as the picker, so the file is
+      // routed through the input rather than handled separately.
+      const { page } = await openPage();
+      const template = Array.from(makeTemplate(['FULL_NAME', 'BASIC_SALARY']));
+
+      await page.evaluate(async (bytes) => {
+        const file = new File([new Uint8Array(bytes)], 'dropped.docx', {
+          type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        });
+        const transfer = new DataTransfer();
+        transfer.items.add(file);
+        document
+          .getElementById('template-drop')!
+          .dispatchEvent(new DragEvent('drop', { dataTransfer: transfer, bubbles: true }));
+      }, template);
+
+      await expect.poll(() => page.textContent('#template-summary')).toContain('FULL_NAME');
+      expect(await page.textContent('#template-drop')).toContain('dropped.docx');
+      await page.close();
+    });
+
+    it('highlights the zone while a file is dragged over it', async () => {
+      const { page } = await openPage();
+      await page.evaluate(() => {
+        document
+          .getElementById('data-drop')!
+          .dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true }));
+      });
+      expect(await page.locator('#data-drop.dragging').count()).toBe(1);
+
+      await page.evaluate(() => {
+        document.getElementById('data-drop')!.dispatchEvent(new DragEvent('dragleave', { bubbles: true }));
+      });
+      expect(await page.locator('#data-drop.dragging').count()).toBe(0);
+      await page.close();
+    });
+
+    it('keeps the file input reachable as the labelled control', async () => {
+      // The input is visually hidden but must remain the real control, or the
+      // zone stops being usable by keyboard and assistive technology.
+      const { page } = await openPage();
+      const wired = await page.evaluate(() => {
+        const label = document.querySelector('#template-drop') as HTMLLabelElement;
+        const input = document.getElementById('template-input') as HTMLInputElement;
+        return { htmlFor: label.htmlFor, id: input.id, disabled: input.disabled };
+      });
+      expect(wired).toEqual({ htmlFor: 'template-input', id: 'template-input', disabled: false });
+      await page.close();
+    });
+  });
+
   describe('writing straight to disk', () => {
     /** Open the page with the File System Access pickers faked out. */
     async function openWithFakeFs(): Promise<Page> {

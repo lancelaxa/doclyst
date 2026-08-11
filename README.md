@@ -20,7 +20,8 @@ throughout, not just the marketing.
 
 ## Two ways to use it
 
-**In your browser** — a local page; nothing is uploaded.
+**In your browser** — a local page; nothing is uploaded. Drag a template and a
+spreadsheet in, choose how files should be named, and generate.
 
 ```bash
 npm install && npm run build
@@ -208,6 +209,13 @@ promise not to look":
 - Values are only ever written to the page as text, never as markup, so a
   column header or filename out of an untrusted spreadsheet cannot inject
   anything.
+
+The interface is plain HTML, CSS and TypeScript with no framework and no
+dependencies of its own: drag-and-drop file zones, a light and dark theme that
+follows the system setting, keyboard-reachable controls with visible focus,
+live-region status updates, and a reduced-motion preference that is honoured.
+Icons are inline SVG and type is system fonts, because a single webfont request
+would break the guarantee below.
 
 The browser tests drive the real page in Chromium and assert the central claim
 behaviourally: loading a template and a spreadsheet and generating a whole

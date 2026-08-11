@@ -70,6 +70,8 @@ interface LoadedData {
 let loadedTemplate: LoadedTemplate | undefined;
 let loadedData: LoadedData | undefined;
 
+const templateDrop = byId<HTMLLabelElement>('template-drop');
+const dataDrop = byId<HTMLLabelElement>('data-drop');
 const templateInput = byId<HTMLInputElement>('template-input');
 const dataInput = byId<HTMLInputElement>('data-input');
 const sheetRow = byId<HTMLDivElement>('sheet-row');
@@ -91,6 +93,68 @@ const templateSummary = byId<HTMLDivElement>('template-summary');
 const dataSummary = byId<HTMLDivElement>('data-summary');
 const filenameWarnings = byId<HTMLDivElement>('filename-warnings');
 
+// --- drag and drop -----------------------------------------------------
+
+/**
+ * Let a file be dropped onto a zone as well as chosen through the picker.
+ *
+ * The drop is routed through the hidden `<input type="file">` rather than
+ * handled separately, so both routes end in exactly one code path — and the
+ * input remains the accessible control the label points at.
+ */
+function enableDropZone(zone: HTMLElement, input: HTMLInputElement): void {
+  const setDragging = (dragging: boolean): void => {
+    zone.classList.toggle('dragging', dragging);
+  };
+
+  zone.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    setDragging(true);
+  });
+  zone.addEventListener('dragleave', () => setDragging(false));
+  zone.addEventListener('drop', (event) => {
+    event.preventDefault();
+    setDragging(false);
+
+    const file = event.dataTransfer?.files?.[0];
+    if (!file) return;
+
+    // Assigning a DataTransfer's list is the only way to put a dropped file
+    // into a file input, which keeps the change handler as the single entry
+    // point for loading.
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('change'));
+  });
+}
+
+enableDropZone(templateDrop, templateInput);
+enableDropZone(dataDrop, dataInput);
+
+/** Mark a zone as holding a file, and name it in place of the prompt. */
+function markZone(zone: HTMLElement, filename: string | undefined): void {
+  zone.classList.toggle('loaded', filename !== undefined);
+  const text = zone.querySelector('.dz-text');
+  const meta = zone.querySelector('.dz-meta');
+  if (!text || !meta) return;
+
+  if (filename === undefined) {
+    // Rebuild the prompt as elements; filenames are never treated as markup.
+    const isTemplate = zone === templateDrop;
+    replaceChildren(
+      text as HTMLElement,
+      el('strong', { text: isTemplate ? 'Choose a template' : 'Choose a spreadsheet' }),
+      document.createTextNode(' or drop it here'),
+    );
+    meta.textContent = isTemplate ? 'DOCX or PDF' : 'CSV or XLSX';
+    return;
+  }
+
+  replaceChildren(text as HTMLElement, el('strong', { text: filename }));
+  meta.textContent = 'Click or drop to replace';
+}
+
 // Progressive enhancement: these only appear where the browser can write to
 // a user-chosen location. Everywhere else the download path is unchanged.
 if (supportsFileSystemAccess()) {
@@ -105,6 +169,7 @@ templateInput.addEventListener('change', () => {
   void withStatus(templateSummary, async () => {
     const file = templateInput.files?.[0];
     loadedTemplate = undefined;
+    markZone(templateDrop, undefined);
     if (!file) return;
 
     const bytes = new Uint8Array(await file.arrayBuffer());
@@ -113,6 +178,7 @@ templateInput.addEventListener('change', () => {
     const template: Template = { kind: detectTemplateKind(bytes), bytes };
     const fields = await readTemplateFields(template);
     loadedTemplate = { template, filename: file.name, fields };
+    markZone(templateDrop, file.name);
 
     replaceChildren(
       templateSummary,
@@ -132,6 +198,7 @@ dataInput.addEventListener('change', () => {
   void withStatus(dataSummary, async () => {
     const file = dataInput.files?.[0];
     loadedData = undefined;
+    markZone(dataDrop, undefined);
     sheetRow.hidden = true;
     if (!file) return;
 
@@ -172,6 +239,7 @@ function loadWorksheet(filename: string, bytes: Uint8Array, sheet: string | unde
 function describeData(): void {
   if (!loadedData) return;
   const { filename, fields, records } = loadedData;
+  markZone(dataDrop, filename);
   replaceChildren(
     dataSummary,
     summaryLine(`${filename} — ${records.length} row${records.length === 1 ? '' : 's'}`),
@@ -386,7 +454,7 @@ function showResults(result: BatchResult): void {
     const totalBytes = result.documents.reduce((sum, document) => sum + document.bytes.length, 0);
     nodes.push(el('p', { className: 'fields', text: `Total size: ${formatBytes(totalBytes)}` }));
 
-    const zipButton = el('button', { className: 'primary', text: 'Download all as ZIP' });
+    const zipButton = el('button', { className: 'btn btn-primary', text: 'Download all as ZIP' });
     zipButton.addEventListener('click', () => {
       const archive = buildZip(
         result.documents.map((document) => ({ name: document.filename, bytes: document.bytes })),
