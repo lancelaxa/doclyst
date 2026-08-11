@@ -180,15 +180,41 @@ nodes directly and resolves only the five predefined XML entities plus numeric
 character references. There is no DTD processing and no entity resolution, so
 XXE and billion-laughs expansion are not reachable.
 
+## The browser interface
+
+`apps/web` runs the same engine in a browser tab. It is a static page: there is
+no server, no upload endpoint and no backend to compromise.
+
+- **The browser enforces it.** The page declares
+  `default-src 'none'; connect-src 'none'; form-action 'none'` and loads no
+  remote scripts, styles, fonts or images. Even if a future change tried to
+  send a record somewhere, the browser would refuse. Verified in the tests by
+  attempting a `fetch` from inside the page and asserting it is blocked.
+- **Nothing in the bundle can talk to the network.** The built output contains
+  no `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource` or `sendBeacon`.
+  Vite's modulepreload polyfill, which calls `fetch`, is deliberately disabled
+  so this stays true and greppable.
+- **Nothing is persisted.** No `localStorage`, no `sessionStorage`, no
+  `indexedDB`, no cookies and no service worker. Asserted after a full batch.
+  Closing the tab disposes of every record.
+- **Downloads are local.** Generated documents are handed over as object URLs,
+  which address an in-memory blob in that tab, not a location on a server. Each
+  handle is released after use rather than kept for the life of the page.
+- **No markup injection.** Column headers, sheet names, placeholder keys and
+  filenames all come from user files and are only ever assigned to
+  `textContent`. There is no `innerHTML` in the app.
+
 ## Multi-user considerations
 
 The CLI runs as a single local user against paths that user already controls,
-so there is no cross-tenant boundary to breach and no server component. Access
-control is the filesystem's, tightened by the `0700`/`0600` defaults above.
+and the web interface runs entirely in one browser tab. Neither has a server,
+so there is no cross-tenant boundary to breach, no shared storage and no
+guessable output URL. Access control is the filesystem's, tightened by the
+`0700`/`0600` defaults above.
 
-If a networked interface is added later, this section needs to be rewritten
+If a hosted, networked interface is ever added, this section needs rewriting
 around isolation, authentication and unpredictable output URLs — none of which
-apply today.
+apply today, because today nothing is hosted.
 
 ## Testing
 

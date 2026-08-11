@@ -18,7 +18,16 @@ throughout, not just the marketing.
 > processing, your retention practices and how you distribute what you produce.
 > See [PRIVACY.md](./PRIVACY.md) for exactly what the tool does and does not do.
 
-## Quick start
+## Two ways to use it
+
+**In your browser** — a local page; nothing is uploaded.
+
+```bash
+npm install && npm run build
+npm run dev:web            # or open apps/web/dist/index.html
+```
+
+**From the command line** — for scripted or repeatable runs.
 
 ```bash
 npm install
@@ -177,11 +186,40 @@ Summarised here, detailed in [PRIVACY.md](./PRIVACY.md).
   file extension, zip-bomb expansion is capped, and archive entries with
   traversal paths are refused.
 
+## The browser interface
+
+The page at `apps/web` does the same work as the CLI, in the browser, with no
+server involved at any point. Pick a template, pick a spreadsheet, generate, and
+download the documents individually or as a ZIP.
+
+Because everything runs in the tab, the privacy story is stronger than "we
+promise not to look":
+
+- The page ships a Content-Security-Policy with `connect-src 'none'`, so the
+  **browser** refuses to let it open a network connection — fetch, XHR,
+  WebSocket and EventSource are all blocked. The guarantee does not depend on
+  our code staying careful.
+- The built bundle contains no `fetch`, `XMLHttpRequest`, `WebSocket`,
+  `localStorage`, `indexedDB` or service worker at all. That is checkable with
+  `grep`, and it is asserted by the tests.
+- There are no remote fonts, scripts, styles or images, and the favicon is
+  inlined, so the page issues no requests beyond loading its own two assets.
+- Nothing is persisted. Close the tab and every record is gone.
+- Values are only ever written to the page as text, never as markup, so a
+  column header or filename out of an untrusted spreadsheet cannot inject
+  anything.
+
+The browser tests drive the real page in Chromium and assert the central claim
+behaviourally: loading a template and a spreadsheet and generating a whole
+batch produces **no off-origin request**, and an attempt to `fetch` out of the
+page is blocked by its own policy.
+
 ## Project layout
 
 ```
 packages/core   Engine: bytes in, bytes out. No filesystem, no network.
 apps/cli        Command-line interface. Owns all file I/O.
+apps/web        Local browser interface. Static; no server, no upload.
 ```
 
 The engine is deliberately pure. Because nothing in `packages/core` can read a
@@ -222,8 +260,6 @@ Known and deliberate, rather than hidden:
 
 - XLSX is read, not written, and macro-enabled `.xlsm` is not supported.
 - PDF templates require AcroForm fields (see above).
-- No GUI yet — the engine is UI-agnostic and a local browser interface is the
-  natural next step.
 - Encrypted or password-protected PDFs are rejected rather than silently saved
   without their protection.
 

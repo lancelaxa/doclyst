@@ -44,8 +44,14 @@ export interface BatchOptions {
    * list of what failed than by an all-or-nothing abort on row 3.
    */
   readonly stopOnError?: boolean;
-  /** Invoked after each record so callers can show progress. */
-  readonly onProgress?: (completed: number, total: number) => void;
+  /**
+   * Invoked after each record so callers can show progress.
+   *
+   * May return a promise, which is awaited. A UI needs that: filling is
+   * otherwise a tight synchronous loop that would freeze the page for the
+   * whole batch, and yielding here lets it paint between records.
+   */
+  readonly onProgress?: (completed: number, total: number) => void | Promise<void>;
 }
 
 /** One successfully generated document. */
@@ -137,7 +143,7 @@ export async function runBatch(
       if (options.stopOnError) break;
     }
 
-    options.onProgress?.(row, records.length);
+    await options.onProgress?.(row, records.length);
   }
 
   return {

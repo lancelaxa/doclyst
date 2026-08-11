@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Doclyst — local document filling</title>
+
+    <!--
+      The privacy claim is enforced by the browser, not just promised in prose.
+
+      `connect-src 'none'` blocks fetch, XHR, WebSocket and EventSource
+      outright, so this page cannot transmit a template, a spreadsheet or a
+      field value anywhere even if some future change tried to. `form-action`
+      and `frame-src` are closed for the same reason, and there are no remote
+      scripts, styles, fonts or images to load.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none';
+               script-src 'self';
+               style-src 'self';
+               img-src 'self' data:;
+               font-src 'self';
+               connect-src 'none';
+               form-action 'none';
+               frame-src 'none';
+               object-src 'none';
+               base-uri 'none'"
+    />
+    <!--
+      Inlined as a data URI so the browser never issues a /favicon.ico request.
+      A page that claims to make no network requests should not make one for
+      its own icon.
+    -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231f5eff'/%3E%3Cpath d='M9 8h9a7 7 0 0 1 0 14h-4v4H9z' fill='%23fff'/%3E%3C/svg%3E"
+    />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta
+      name="description"
+      content="Fill DOCX and PDF templates from CSV or XLSX data, entirely in your browser."
+    />
+  </head>
+  <body>
+    <div class="page">
+      <header class="masthead">
+        <h1>Doclyst</h1>
+        <p class="tagline">
+          Fill DOCX and PDF templates from a spreadsheet — one document per row.
+        </p>
+        <p class="assurance" role="note">
+          <strong>Everything happens on this device.</strong> Your template, your
+          spreadsheet and every value in it stay in this browser tab. Nothing is
+          uploaded — this page is blocked from making network requests at all.
+        </p>
+      </header>
+
+      <main>
+        <section class="step" aria-labelledby="step-template">
+          <h2 id="step-template"><span class="num">1</span> Template</h2>
+          <p class="hint">
+            A <code>.docx</code> with <code>{{PLACEHOLDERS}}</code> in the text, or a
+            <code>.pdf</code> with form fields named after your columns.
+          </p>
+          <input type="file" id="template-input" accept=".docx,.pdf" />
+          <div id="template-summary" class="summary" role="status" aria-live="polite"></div>
+        </section>
+
+        <section class="step" aria-labelledby="step-data">
+          <h2 id="step-data"><span class="num">2</span> Data</h2>
+          <p class="hint">
+            A <code>.csv</code> or <code>.xlsx</code> whose header row names the fields.
+          </p>
+          <input type="file" id="data-input" accept=".csv,.xlsx" />
+          <div class="field-row" id="sheet-row" hidden>
+            <label for="sheet-select">Worksheet</label>
+            <select id="sheet-select"></select>
+          </div>
+          <div id="data-summary" class="summary" role="status" aria-live="polite"></div>
+        </section>
+
+        <section class="step" aria-labelledby="step-options">
+          <h2 id="step-options"><span class="num">3</span> Options</h2>
+
+          <div class="field-row">
+            <label for="filename-input">File naming</label>
+            <input
+              type="text"
+              id="filename-input"
+              placeholder="document-0001 (default)"
+              spellcheck="false"
+              autocomplete="off"
+            />
+          </div>
+          <p class="hint">
+            Leave blank to number files by position. A filename is visible without
+            opening the file, so naming documents after an identifier discloses it to
+            anyone who can see the folder. Use <code>{{FIELD}}</code> and
+            <code>{{ROW}}</code>.
+          </p>
+          <div id="filename-warnings" class="warnings" role="status" aria-live="polite"></div>
+
+          <div class="field-row">
+            <label for="missing-select">Missing values</label>
+            <select id="missing-select">
+              <option value="error">Fail that row (recommended)</option>
+              <option value="empty">Leave blank</option>
+              <option value="keep">Leave the placeholder visible</option>
+            </select>
+          </div>
+
+          <label class="check">
+            <input type="checkbox" id="empty-is-missing" />
+            <span>Treat a blank cell as a missing value</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="scrub-metadata" checked />
+            <span>Remove template author and company metadata from output</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="flatten-pdf" checked />
+            <span>Flatten PDF form fields so values cannot be edited back out</span>
+          </label>
+        </section>
+
+        <section class="step" aria-labelledby="step-generate">
+          <h2 id="step-generate"><span class="num">4</span> Generate</h2>
+          <button type="button" id="generate" disabled>Generate documents</button>
+          <div class="progress" id="progress" hidden>
+            <div class="bar"><div class="fill" id="progress-fill"></div></div>
+            <span id="progress-label"></span>
+          </div>
+          <div id="results" class="results" role="status" aria-live="polite"></div>
+        </section>
+      </main>
+
+      <footer>
+        <p>
+          Doclyst implements privacy and security controls that support responsible
+          handling of personal data. It is <strong>not</strong> a compliance product and
+          does not make any organisation PDPA-compliant.
+        </p>
+      </footer>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

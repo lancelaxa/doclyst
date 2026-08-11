@@ -1,0 +1,296 @@
+/*
+ * Deliberately plain: system fonts only, no webfonts, no icon sets, no remote
+ * assets of any kind. That keeps the page genuinely self-contained, which is
+ * what makes the "nothing leaves this device" claim true rather than aspirational.
+ */
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #d8dce3;
+  --text: #1a1d21;
+  --muted: #5c6470;
+  --accent: #1f5eff;
+  --accent-text: #ffffff;
+  --ok: #0f7b4f;
+  --warn-bg: #fff5e6;
+  --warn-border: #e0a44a;
+  --warn-text: #7a4a06;
+  --radius: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --surface: #1c1f25;
+    --border: #333941;
+    --text: #e8eaed;
+    --muted: #9aa3af;
+    --accent: #6d97ff;
+    --accent-text: #0d1017;
+    --ok: #4ade80;
+    --warn-bg: #2e2413;
+    --warn-border: #a97c2e;
+    --warn-text: #f0c777;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/*
+ * The `hidden` attribute must win over the layout rules below.
+ *
+ * A class such as `.field-row { display: flex }` is more specific than the
+ * user-agent's `[hidden] { display: none }`, so without this an element set
+ * to hidden in script stays on screen.
+ */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.55 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.page {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+}
+
+.masthead h1 {
+  margin: 0;
+  font-size: 1.9rem;
+  letter-spacing: -0.02em;
+}
+
+.tagline {
+  margin: 0.25rem 0 1rem;
+  color: var(--muted);
+}
+
+.assurance {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--ok);
+  border-radius: var(--radius);
+  padding: 0.85rem 1rem;
+  margin: 0 0 2rem;
+  font-size: 0.95rem;
+}
+
+.step {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.step h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.num {
+  display: inline-grid;
+  place-items: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 0.85rem;
+  font-weight: 600;
+  flex: none;
+}
+
+.hint {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+code {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  background: var(--bg);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+input[type='file'],
+input[type='text'],
+select {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  max-width: 100%;
+}
+
+input[type='text'],
+select {
+  min-width: 16rem;
+}
+
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.field-row label {
+  min-width: 8.5rem;
+  font-size: 0.92rem;
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  margin: 0.5rem 0;
+  font-size: 0.92rem;
+}
+
+.check input {
+  margin-top: 0.25rem;
+  flex: none;
+}
+
+button {
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent-text);
+  background: var(--accent);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0.6rem 1.1rem;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0.15rem 0;
+  font-weight: 400;
+  text-align: left;
+  text-decoration: underline;
+  cursor: pointer;
+  word-break: break-all;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.summary,
+.results,
+.warnings {
+  margin-top: 0.75rem;
+  font-size: 0.92rem;
+}
+
+.summary p,
+.results p {
+  margin: 0.3rem 0;
+}
+
+.name {
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.fields {
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.ok {
+  color: var(--ok);
+}
+
+.partial {
+  color: var(--warn-text);
+  font-weight: 600;
+}
+
+.warn {
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn-text);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+}
+
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.bar {
+  flex: 1;
+  height: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+.file-list,
+.failure-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0 0;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.file-list li,
+.failure-list li {
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.failure-list li {
+  color: var(--warn-text);
+}
+
+.results h3 {
+  margin: 1.25rem 0 0;
+  font-size: 0.95rem;
+}
+
+footer {
+  margin-top: 2rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
