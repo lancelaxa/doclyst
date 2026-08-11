@@ -7,6 +7,7 @@ import {
   readCsvRecords,
   readSheetNames,
   readTemplateFields,
+  readUnsupportedForPdf,
   readXlsxRecords,
   runBatch,
   safeErrorSummary,
@@ -16,6 +17,7 @@ import {
   type BatchSummary,
   type DataRecord,
   type MissingValuePolicy,
+  type OutputFormat,
   type Template,
 } from '@doclyst/core';
 import { byId, clear, el, nextFrame, replaceChildren } from './dom.js';
@@ -77,6 +79,8 @@ const dataInput = byId<HTMLInputElement>('data-input');
 const sheetRow = byId<HTMLDivElement>('sheet-row');
 const sheetSelect = byId<HTMLSelectElement>('sheet-select');
 const filenameInput = byId<HTMLInputElement>('filename-input');
+const formatSelect = byId<HTMLSelectElement>('format-select');
+const formatWarnings = byId<HTMLDivElement>('format-warnings');
 const missingSelect = byId<HTMLSelectElement>('missing-select');
 const emptyIsMissing = byId<HTMLInputElement>('empty-is-missing');
 const scrubMetadata = byId<HTMLInputElement>('scrub-metadata');
@@ -272,6 +276,51 @@ filenameInput.addEventListener('input', () => {
   replaceChildren(filenameWarnings, ...warnings.map((w) => warning(w.message)));
 });
 
+formatSelect.addEventListener('change', syncFormat);
+
+/** The format actually in effect: a PDF template can only produce PDF. */
+function outputFormat(): OutputFormat {
+  if (loadedTemplate?.template.kind === 'pdf') return 'pdf';
+  return formatSelect.value === 'pdf' ? 'pdf' : 'docx';
+}
+
+/**
+ * Reflect the template's constraints in the format control, and say up front
+ * what a PDF run would lose.
+ *
+ * Warning here rather than after the run is the point: once three hundred
+ * documents are on disk, a missing letterhead has already been discovered by
+ * whoever opens one.
+ */
+function syncFormat(): void {
+  const kind = loadedTemplate?.template.kind;
+  formatSelect.disabled = kind === 'pdf';
+  if (kind === 'pdf') formatSelect.value = 'pdf';
+
+  clear(formatWarnings);
+  if (kind === 'pdf') {
+    formatWarnings.append(
+      el('p', { className: 'fields', text: 'A PDF template always produces PDF.' }),
+    );
+    return;
+  }
+  if (kind !== 'docx' || outputFormat() !== 'pdf') return;
+
+  try {
+    const unsupported = readUnsupportedForPdf(loadedTemplate!.template);
+    if (unsupported.length > 0) {
+      formatWarnings.append(
+        warning(
+          `This template uses ${unsupported.join(', ')}, which cannot be carried into a re-typeset PDF. Generate one document and check it before running the batch.`,
+        ),
+      );
+    }
+  } catch {
+    // Whatever is wrong with the template will be reported properly when the
+    // batch runs; a warning box is not the place to raise it first.
+  }
+}
+
 // --- generating --------------------------------------------------------
 
 generateButton.addEventListener('click', () => {
@@ -327,6 +376,7 @@ async function streamToDisk(target: 'folder' | 'zip'): Promise<void> {
 
   const stream = streamBatch(loadedTemplate.template, loadedData.records, {
     missing: missingSelect.value as MissingValuePolicy,
+    outputFormat: outputFormat(),
     treatEmptyAsMissing: emptyIsMissing.checked,
     filenameTemplate: filenameInput.value.trim() || undefined,
     docx: { scrubMetadata: scrubMetadata.checked },
@@ -395,6 +445,8 @@ function showStreamResult(
     nodes.push(warning(`No column matched: ${summary.unmatchedFields.join(', ')}`));
   }
 
+  nodes.push(...unsupportedNotice(summary.unsupported));
+
   if (failures.length > 0) {
     const list = el('ul', { className: 'failure-list' });
     for (const failure of failures) {
@@ -417,6 +469,7 @@ async function generate(): Promise<void> {
   try {
     const result = await runBatch(loadedTemplate.template, loadedData.records, {
       missing: missingSelect.value as MissingValuePolicy,
+      outputFormat: outputFormat(),
       treatEmptyAsMissing: emptyIsMissing.checked,
       filenameTemplate: filenameInput.value.trim() || undefined,
       docx: { scrubMetadata: scrubMetadata.checked },
@@ -449,6 +502,8 @@ function showResults(result: BatchResult): void {
         (result.failures.length > 0 ? `, ${result.failures.length} row(s) failed` : ''),
     }),
   );
+
+  nodes.push(...unsupportedNotice(result.unsupported));
 
   if (result.documents.length > 0) {
     const totalBytes = result.documents.reduce((sum, document) => sum + document.bytes.length, 0);
@@ -502,6 +557,16 @@ function showResults(result: BatchResult): void {
   replaceChildren(results, ...nodes);
 }
 
+/** Repeat, on the finished batch, what the template could not carry into PDF. */
+function unsupportedNotice(unsupported: readonly string[]): Node[] {
+  if (unsupported.length === 0) return [];
+  return [
+    warning(
+      `These documents were re-typeset as PDF, and the template's ${unsupported.join(', ')} could not be carried over. Check one before sending them.`,
+    ),
+  ];
+}
+
 function updateProgress(completed: number, total: number): void {
   const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
   progressFill.style.width = `${percent}%`;
@@ -520,6 +585,7 @@ function ready(): boolean {
 }
 
 function refresh(): void {
+  syncFormat();
   setBusy(false);
 }
 

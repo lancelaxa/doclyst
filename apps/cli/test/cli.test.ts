@@ -9,6 +9,7 @@ import { parseArgs, getBoolean, getString } from '../src/args.js';
 import { resolveWithin } from '../src/paths.js';
 import { fillCommand, inspectCommand, type CommandContext } from '../src/commands.js';
 import { makeTemplate } from './helpers/template.js';
+import { pdfText } from './helpers/pdftext.js';
 
 /** Collects CLI output so assertions can check what an operator would see. */
 function makeContext(): CommandContext & { out: string[]; err: string[] } {
@@ -157,6 +158,48 @@ describe('CLI commands', () => {
       expect(manifest).toContain('document-0001.docx');
       expect(manifest).not.toContain('Aisha Rahman');
       expect(manifest).not.toContain('4500');
+    });
+
+    describe('--output', () => {
+      it('writes PDFs, named .pdf, when asked for PDF', async () => {
+        const ctx = makeContext();
+        expect(await fillCommand(fillArgs('--output', 'pdf'), ctx)).toBe(0);
+
+        const first = new Uint8Array(await readFile(join(outDir, 'document-0001.pdf')));
+        expect(Buffer.from(first.slice(0, 5)).toString()).toBe('%PDF-');
+        expect(pdfText(first)).toContain('Aisha Rahman');
+      });
+
+      it('still writes DOCX by default', async () => {
+        await fillCommand(fillArgs(), makeContext());
+        await expect(stat(join(outDir, 'document-0001.docx'))).resolves.toBeDefined();
+      });
+
+      it('creates each PDF owner-only, like every other output', async () => {
+        await fillCommand(fillArgs('--output', 'pdf'), makeContext());
+        expect((await stat(join(outDir, 'document-0001.pdf'))).mode & 0o777).toBe(0o600);
+      });
+
+      it('rejects a format it does not have', async () => {
+        const ctx = makeContext();
+        expect(await fillCommand(fillArgs('--output', 'rtf'), ctx)).toBe(2);
+        expect(ctx.err.join('\n')).toContain('--output must be one of');
+      });
+
+      it('warns when PDF output would drop part of the template', async () => {
+        // Silence here would mean discovering the missing table after sending.
+        await writeFile(templatePath, makeTemplate(['NAME', 'SALARY'], { withTable: true }));
+        const ctx = makeContext();
+        expect(await fillCommand(fillArgs('--output', 'pdf'), ctx)).toBe(0);
+        expect(ctx.err.join('\n')).toContain('tables');
+      });
+
+      it('says nothing about unsupported features when writing DOCX', async () => {
+        await writeFile(templatePath, makeTemplate(['NAME', 'SALARY'], { withTable: true }));
+        const ctx = makeContext();
+        await fillCommand(fillArgs(), ctx);
+        expect(ctx.err.join('\n')).not.toContain('tables');
+      });
     });
 
     it('writes a ZIP when asked', async () => {

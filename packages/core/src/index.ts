@@ -72,6 +72,17 @@ export {
 export { decodeXmlText, encodeXmlText } from './docx/xml.js';
 
 export {
+  extractDocumentModel,
+  modelToText,
+  type Alignment,
+  type DocumentModel,
+  type Paragraph,
+  type TextRun,
+} from './docx/model.js';
+
+export { renderModelToPdf, type PdfRenderOptions } from './pdf/render.js';
+
+export {
   fillPdf,
   readPdfFields,
   fieldNameToKey,
@@ -93,11 +104,13 @@ export {
   streamBatch,
   detectTemplateKind,
   readTemplateFields,
+  readUnsupportedForPdf,
   type BatchOptions,
   type BatchEvent,
   type BatchFailure,
   type BatchResult,
   type BatchSummary,
+  type OutputFormat,
   type GeneratedDocument,
   type Template,
   type TemplateKind,

@@ -78,6 +78,38 @@ field cannot be filled. PDF stores positioned glyphs, not editable text, so
 substituting a longer value would require re-flowing the page — a half-correct
 payslip is worse than a clear error, so Doclyst reports one.
 
+## Choosing the output format
+
+A DOCX template produces `.docx` by default and `.pdf` on request; a PDF
+template always produces PDF.
+
+```bash
+--output pdf        # in the browser: Options → Output format
+```
+
+PDF output is **re-typeset, not converted**. Doclyst reads the filled
+document's text — its paragraphs, bold and italic, explicit font sizes and
+alignment — and lays it out afresh in the PDF. The wording is exactly the
+wording in the template; the appearance will not match Word pixel for pixel.
+
+That choice is deliberate. Converting Word layout faithfully needs a layout
+engine, and there is no layout engine that runs in a browser tab — the only
+alternative would have been to send documents to a conversion service, which
+is precisely what this tool exists to avoid.
+
+Two limits follow from it, and both are reported rather than left to be
+discovered:
+
+- **Tables, images, automatic numbering, and headers and footers are not
+  carried over.** Doclyst inspects the template before the run and warns if it
+  uses any of them, in the browser as soon as you pick PDF, and on the command
+  line before the first file is written.
+- **Only the Western European character set is available.** PDF's built-in
+  fonts cover WinAnsi, so a name in Chinese, Tamil or another non-Latin script
+  fails that row with a clear message rather than producing a document with
+  missing glyphs — a mangled contract is worse than a failed one. The rest of
+  the batch is unaffected. If your data needs those scripts, use DOCX output.
+
 ## Providing data
 
 CSV or XLSX, with the header row naming the fields:

@@ -167,6 +167,21 @@
           <div id="filename-warnings" class="warnings" role="status" aria-live="polite"></div>
 
           <div class="field-row">
+            <label for="format-select">Output format</label>
+            <select id="format-select">
+              <option value="docx">Word (.docx)</option>
+              <option value="pdf">PDF (.pdf)</option>
+            </select>
+          </div>
+          <p class="hint indent" id="format-hint">
+            PDF is produced by re-typesetting the text, not by converting Word's
+            layout, so the wording is exact but the appearance may differ.
+            Tables, images and automatic numbering are not carried over — you
+            will be told before generating if the template uses them.
+          </p>
+          <div id="format-warnings" class="warnings" role="status" aria-live="polite"></div>
+
+          <div class="field-row">
             <label for="missing-select">Missing values</label>
             <select id="missing-select">
               <option value="error">Fail that row (recommended)</option>

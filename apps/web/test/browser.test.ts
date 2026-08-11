@@ -7,7 +7,8 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unzipSync } from 'fflate';
 import { readDocxText } from '@doclyst/core';
-import { makeTemplate } from './helpers/template.js';
+import { makeTemplate, makePdfTemplate } from './helpers/template.js';
+import { pdfText } from './helpers/pdftext.js';
 import { installFakeFileSystem, removeFileSystemAccess } from './helpers/fake-fs.js';
 
 /**
@@ -115,6 +116,16 @@ async function loadInputs(page: Page): Promise<void> {
   });
 }
 
+/** Read the bytes of the first document offered for download. */
+async function downloadFirst(page: Page): Promise<Uint8Array> {
+  const download = page.waitForEvent('download');
+  await page.locator('.file-list button').first().click();
+  const stream = await (await download).createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  return new Uint8Array(Buffer.concat(chunks));
+}
+
 describe('the built page', () => {
   it('loads without console errors', async () => {
     const errors: string[] = [];
@@ -201,6 +212,88 @@ describe('the built page', () => {
     // One person's data must not appear in another's document.
     expect(text).not.toContain('Wei Lun Tan');
     await page.close();
+  });
+
+  describe('PDF output', () => {
+    it('writes PDFs, named .pdf, when PDF is chosen', async () => {
+      const { page } = await openPage();
+      await loadInputs(page);
+      await page.selectOption('#format-select', 'pdf');
+      await page.click('#generate');
+
+      await expect.poll(() => page.textContent('#results')).toContain('3 documents ready');
+      expect(await page.textContent('.file-list')).toContain('document-0001.pdf');
+      await page.close();
+    });
+
+    it('produces a PDF whose content is correctly substituted', async () => {
+      const { page } = await openPage();
+      await loadInputs(page);
+      await page.selectOption('#format-select', 'pdf');
+      await page.click('#generate');
+      await expect.poll(() => page.textContent('#results')).toContain('documents ready');
+
+      const bytes = await downloadFirst(page);
+      expect(Buffer.from(bytes.slice(0, 5)).toString()).toBe('%PDF-');
+
+      const text = pdfText(bytes);
+      expect(text).toContain('Aisha Rahman');
+      expect(text).toContain('4500');
+      // One person's data must not appear in another's document.
+      expect(text).not.toContain('Wei Lun Tan');
+      await page.close();
+    });
+
+    it('locks the format to PDF for a PDF template, which cannot become Word', async () => {
+      const { page } = await openPage();
+      await page.setInputFiles('#template-input', {
+        name: 'form.pdf',
+        mimeType: 'application/pdf',
+        buffer: Buffer.from(await makePdfTemplate()),
+      });
+      await expect.poll(() => page.textContent('#template-summary')).toContain('PDF');
+      expect(await page.locator('#format-select').isDisabled()).toBe(true);
+      expect(await page.inputValue('#format-select')).toBe('pdf');
+      await page.close();
+    });
+
+    it('warns before the run when PDF output would drop part of the template', async () => {
+      // After three hundred documents are on disk, a missing table has already
+      // been found by whoever opened one.
+      const { page } = await openPage();
+      await page.setInputFiles('#template-input', {
+        name: 'offer.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        buffer: Buffer.from(makeTemplate(['FULL_NAME', 'BASIC_SALARY'], { withTable: true })),
+      });
+      await page.selectOption('#format-select', 'pdf');
+      await expect.poll(() => page.textContent('#format-warnings')).toContain('tables');
+      await page.close();
+    });
+
+    it('says nothing about unsupported features while Word output is selected', async () => {
+      const { page } = await openPage();
+      await page.setInputFiles('#template-input', {
+        name: 'offer.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        buffer: Buffer.from(makeTemplate(['FULL_NAME', 'BASIC_SALARY'], { withTable: true })),
+      });
+      await expect.poll(() => page.textContent('#template-summary')).toContain('FULL_NAME');
+      expect(await page.textContent('#format-warnings')).toBe('');
+      await page.close();
+    });
+
+    it('still sends nothing off the page when rendering PDF', async () => {
+      // The whole privacy claim, restated for the path that re-typesets.
+      const { page, requests } = await openPage();
+      await loadInputs(page);
+      await page.selectOption('#format-select', 'pdf');
+      await page.click('#generate');
+      await expect.poll(() => page.textContent('#results')).toContain('documents ready');
+
+      expect(offOriginRequests(requests)).toEqual([]);
+      await page.close();
+    });
   });
 
   it('packs every document into a downloadable ZIP', async () => {

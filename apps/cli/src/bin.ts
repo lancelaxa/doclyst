@@ -31,6 +31,11 @@ Options
                         document-0001, which discloses nothing in a listing.
   --missing <policy>    error (default) | empty | keep. How to treat a
                         placeholder with no value.
+  --output <format>     docx (default) | pdf. A .docx template can produce
+                        PDF, which is re-typeset rather than converted, so
+                        tables, images and numbering are not carried over —
+                        the run says so if the template uses them. A .pdf
+                        template always produces PDF.
   --empty-is-missing    Treat a blank cell as a missing value.
   --stop-on-error       Abort at the first failing row instead of continuing.
   --dry-run             Report what would be produced; write nothing.

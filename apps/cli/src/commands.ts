@@ -12,6 +12,7 @@ import {
   runBatch,
   type BatchResult,
   type MissingValuePolicy,
+  type OutputFormat,
   type Template,
 } from '@doclyst/core';
 import { getBoolean, getString, type ParsedArgs } from './args.js';
@@ -110,7 +111,17 @@ export async function fillCommand(args: ParsedArgs, ctx: CommandContext): Promis
     return 2;
   }
 
+  const outputFormat = parseOutputFormat(getString(args, 'output'));
+  if (outputFormat === undefined) {
+    ctx.error('--output must be one of: docx, pdf.');
+    return 2;
+  }
+
   const template = await loadTemplate(templatePath);
+  if (template.kind === 'pdf' && outputFormat === 'docx' && getString(args, 'output')) {
+    ctx.error('A PDF template can only produce PDF; --output docx does not apply.');
+    return 2;
+  }
   const { records } = await loadRecords(dataPath, getString(args, 'sheet'));
   if (records.length === 0) {
     ctx.error('The data file contains no data rows.');
@@ -120,6 +131,7 @@ export async function fillCommand(args: ParsedArgs, ctx: CommandContext): Promis
   const dryRun = getBoolean(args, 'dry-run');
   const result = await runBatch(template, records, {
     missing,
+    outputFormat,
     treatEmptyAsMissing: getBoolean(args, 'empty-is-missing'),
     filenameTemplate: getString(args, 'filename'),
     stopOnError: getBoolean(args, 'stop-on-error'),
@@ -132,6 +144,14 @@ export async function fillCommand(args: ParsedArgs, ctx: CommandContext): Promis
 
   for (const warning of result.warnings) {
     ctx.error(`Warning: ${warning.message}`);
+  }
+
+  // Worth saying loudly: a table dropped from a contract is the kind of thing
+  // nobody notices until after it has been sent.
+  if (result.unsupported.length > 0) {
+    ctx.error(
+      `Warning: producing PDF re-typesets the document, and this template uses ${result.unsupported.join(', ')}, which cannot be carried over. Check one document before sending the batch.`,
+    );
   }
 
   if (dryRun) {
@@ -297,6 +317,11 @@ async function loadRecords(path: string, sheet?: string) {
 function parseMissingPolicy(value: string | undefined): MissingValuePolicy | undefined {
   if (value === undefined) return 'error';
   return value === 'error' || value === 'empty' || value === 'keep' ? value : undefined;
+}
+
+function parseOutputFormat(value: string | undefined): OutputFormat | undefined {
+  if (value === undefined) return 'docx';
+  return value === 'docx' || value === 'pdf' ? value : undefined;
 }
 
 function normalize(key: string): string {

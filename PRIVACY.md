@@ -147,6 +147,30 @@ the recipient cannot edit them back out, and the interactive field objects —
 which hold their own copy of every value — are removed rather than shipped
 alongside the rendered text. `--no-flatten` opts out.
 
+A PDF rendered from a DOCX template carries less still: it is built from the
+template's text, so nothing from the original file's document properties,
+revision history or embedded objects reaches it in the first place. Its
+metadata is scrubbed on the same setting.
+
+## Rendering DOCX to PDF
+
+PDF output re-typesets the filled document rather than converting it, and it
+does so in the same process as everything else — no conversion service, no
+headless Office, no upload. That is the reason for the approach: an accurate
+conversion would need a layout engine that cannot run in a browser, and the
+alternatives all involve sending the document somewhere.
+
+Two consequences are surfaced rather than hidden, because both are the kind of
+thing that is only noticed after a document has been sent:
+
+- Content the renderer cannot reproduce — tables, images, automatic numbering,
+  and headers and footers — is detected in the template and reported before the
+  batch runs.
+- Text outside the WinAnsi character set cannot be written with PDF's built-in
+  fonts. That row fails; the batch continues. The error **counts** the
+  offending characters and does not quote them, because the text that failed is
+  most often somebody's name.
+
 ## Handling hostile input
 
 Both the template and the data file are treated as untrusted.

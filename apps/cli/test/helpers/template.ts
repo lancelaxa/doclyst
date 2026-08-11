@@ -19,12 +19,16 @@ const RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
 </Relationships>`;
 
-function documentXml(placeholders: readonly string[]): string {
+/** A one-cell table, used to test what PDF output cannot carry over. */
+const TABLE = '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>';
+
+function documentXml(placeholders: readonly string[], withTable: boolean): string {
   const paragraphs = placeholders
     .map((name) => `<w:p><w:r><w:t>Field {{${name}}}.</w:t></w:r></w:p>`)
     .join('');
+  const body = withTable ? paragraphs + TABLE : paragraphs;
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paragraphs}</w:body></w:document>`;
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`;
 }
 
 /** The earliest timestamp the ZIP format can represent; keeps output stable. */
@@ -36,12 +40,15 @@ const FIXED_TIMESTAMP = new Date(Date.UTC(1980, 0, 1));
  * Defaults to NAME and SALARY, matching the CSV used by most CLI tests; the
  * XLSX fixture has different column headers and passes its own.
  */
-export function makeTemplate(placeholders: readonly string[] = ['NAME', 'SALARY']): Uint8Array {
+export function makeTemplate(
+  placeholders: readonly string[] = ['NAME', 'SALARY'],
+  options: { readonly withTable?: boolean } = {},
+): Uint8Array {
   return zipSync(
     {
       '[Content_Types].xml': strToU8(CONTENT_TYPES),
       '_rels/.rels': strToU8(RELS),
-      'word/document.xml': strToU8(documentXml(placeholders)),
+      'word/document.xml': strToU8(documentXml(placeholders, options.withTable ?? false)),
     },
     { mtime: FIXED_TIMESTAMP },
   );

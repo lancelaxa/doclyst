@@ -199,7 +199,8 @@ documents:
 4. Look for the green line: *“Every template placeholder has a matching
    column.”* If instead you see **“No column matches: …”**, fix that before
    generating — otherwise every row will fail.
-5. Adjust anything under **Options** (most people do not need to).
+5. Adjust anything under **Options** (most people do not need to). If you
+   need PDFs rather than Word files, set **Output format** to *PDF*.
 6. Press **Generate documents**, then download them individually or as a ZIP.
 
 Nothing is uploaded at any point. The page is blocked by the browser from
@@ -211,6 +212,40 @@ Always open one or two generated documents before sending anything. The most
 common mistakes — a column mapped to the wrong placeholder, a date in an
 unexpected format, a missing currency symbol — are obvious on sight and
 invisible in a summary.
+
+---
+
+## Getting PDFs instead of Word files
+
+Set **Output format** to *PDF* in the browser, or pass `--output pdf` on the
+command line. A PDF template always produces PDF, so the setting only applies
+to Word templates.
+
+**What you get.** The wording is exactly the wording in your template, with
+bold, italic, font sizes and paragraph alignment preserved. The layout is
+re-created rather than copied, so the result will not look identical to the
+Word file — line breaks and spacing may fall differently.
+
+**Why not an exact copy?** Reproducing Word's layout faithfully needs a layout
+engine, and none runs inside a browser tab. The only other way to do it would
+be to upload your documents to a conversion service — which is the one thing
+this tool is built never to do.
+
+**Two things to check before you run a batch as PDF:**
+
+1. **Tables, images, bullet lists, headers and footers do not come across.**
+   Doclyst tells you as soon as you choose PDF if your template uses any of
+   them. If your letterhead lives in the Word header, it will not appear in the
+   PDF — put it in the body of the document instead, or keep DOCX output.
+2. **Names must use Western European characters.** PDF's built-in fonts do not
+   include Chinese, Tamil, Malay in Jawi script, or other non-Latin writing.
+   A row whose data needs them fails with a clear message instead of producing
+   a document full of blanks — the rest of the batch still completes. **If your
+   staff list includes such names, generate DOCX** and convert with Word or
+   your usual PDF printer.
+
+Generate one document and open it before running the whole batch. This is worth
+doing every time, and doubly so the first time you use a template as PDF.
 
 ---
 
@@ -323,6 +358,7 @@ Useful options:
 |---|---|
 | `--zip out.zip` | Also (or instead) write one ZIP |
 | `--sheet "Sheet2"` | Choose a worksheet by name or number |
+| `--output pdf` | Write PDFs instead of Word files (see above) |
 | `--missing empty` | Blank out missing values instead of failing the row |
 | `--empty-is-missing` | Treat blank cells as missing |
 | `--dry-run` | Report what would happen; write nothing |
@@ -354,6 +390,8 @@ Exit codes: `0` all good, `1` finished with some failed rows, `2` wrong usage.
 | **The workbook has no worksheet named "X"** | Sheet name typo — the message lists the real ones | Use one of the names shown |
 | **The value for "X" is not one of the options** | A PDF dropdown only accepts certain answers | Make the cell match one of the allowed options exactly |
 | **Encrypted or password-protected PDFs are not supported** | The template is locked | Remove the password, then use it as a template |
+| **This text cannot be written to a PDF with the built-in fonts** | A name or value uses characters outside the Western European set | Generate DOCX for that batch and convert with Word, or correct the cell if it is a stray character |
+| **This template uses tables, images, … which cannot be carried into a re-typeset PDF** | PDF output re-lays the text and cannot reproduce those | Move the content into ordinary paragraphs, or keep DOCX output |
 | **Refusing to overwrite an existing file** | Output already exists | Use a new folder, or add `--force` |
 | **A ZIP this large may fail to save** | The batch is too big for an in-memory download | Use *Save to folder* / *Save as ZIP*, or the command line |
 
