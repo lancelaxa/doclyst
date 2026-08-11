@@ -43,8 +43,13 @@ stick. It never needs updating to keep working, and it works offline.
 
 ### Option B — a link you can bookmark
 
-If the repository owner has switched on GitHub Pages (Settings → Pages →
-Source: **GitHub Actions**), the app is also published at:
+**This needs one setting turned on first.** Go to the repository's
+**Settings → Pages**, and under *Source* choose **GitHub Actions**. Then
+re-run the latest workflow from the Actions tab. Until that is done the
+deploy step is skipped with a note explaining why, and Option A above still
+works exactly as described.
+
+Once enabled, the app is published at:
 
 ```
 https://<owner>.github.io/<repository>/
