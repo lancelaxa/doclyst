@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
-import { fillDocx, readDocxFields, readDocxText } from '../src/docx/fill.js';
+import { fillDocx, fillPreparedDocx, prepareDocx, readDocxFields, readDocxText } from '../src/docx/fill.js';
 import { DoclystError } from '../src/errors.js';
 import { FIXED_ARCHIVE_TIMESTAMP } from '../src/internal/deterministic.js';
 import { buildDocx, headerXml, para, run, splitRuns } from './helpers/fixtures.js';
@@ -170,6 +170,66 @@ describe('fillDocx', () => {
         expect((error as DoclystError).message).toMatch(/details withheld|not a valid DOCX/);
       }
     });
+  });
+});
+
+describe('prepared templates', () => {
+  it('produces the same bytes as filling the raw template', () => {
+    const docx = buildDocx(para(run('Dear {{NAME}},')));
+    const direct = fillDocx(docx, echo);
+    const viaPrepared = fillPreparedDocx(prepareDocx(docx), echo);
+    expect(viaPrepared.bytes).toEqual(direct.bytes);
+    expect(viaPrepared.replaced).toBe(direct.replaced);
+  });
+
+  it('does not leak one record"s values into the next', () => {
+    // The whole point of preparing once is reuse, so the shared state must be
+    // read-only. A leak here would put one person's salary in another's letter.
+    const docx = buildDocx(para(run('{{NAME}} earns {{SALARY}}')));
+    const prepared = prepareDocx(docx);
+
+    const first = readDocxText(
+      fillPreparedDocx(prepared, (key) => (key === 'NAME' ? 'Aisha Rahman' : '4500')).bytes,
+    );
+    const second = readDocxText(
+      fillPreparedDocx(prepared, (key) => (key === 'NAME' ? 'Wei Lun Tan' : '5200')).bytes,
+    );
+
+    expect(first).toBe('Aisha Rahman earns 4500');
+    expect(second).toBe('Wei Lun Tan earns 5200');
+    expect(second).not.toContain('Aisha');
+    expect(second).not.toContain('4500');
+  });
+
+  it('stays stable across many reuses', () => {
+    const docx = buildDocx(para(run('{{NAME}}')));
+    const prepared = prepareDocx(docx);
+    const first = fillPreparedDocx(prepared, echo).bytes;
+    for (let i = 0; i < 20; i += 1) {
+      expect(fillPreparedDocx(prepared, echo).bytes).toEqual(first);
+    }
+  });
+
+  it('validates the template once, up front', () => {
+    expect(() => prepareDocx(new Uint8Array([1, 2, 3, 4]))).toThrow(/not a valid DOCX/);
+  });
+
+  it('scrubs metadata during preparation', () => {
+    const docx = buildDocx(para(run('{{NAME}}')));
+    const entries = unzipSync(fillPreparedDocx(prepareDocx(docx), echo).bytes);
+    expect(strFromU8(entries['docProps/core.xml']!)).not.toContain('Template Author');
+  });
+
+  it('round-trips an incompressible part untouched', () => {
+    // Such parts are stored rather than deflated; the bytes must survive.
+    const media = new Uint8Array(2048);
+    for (let i = 0; i < media.length; i += 1) media[i] = (i * 2654435761) % 256;
+    const docx = zipSync(
+      { ...unzipSync(buildDocx(para(run('{{NAME}}')))), 'word/media/photo.jpeg': media },
+      { mtime: FIXED_ARCHIVE_TIMESTAMP },
+    );
+    const out = unzipSync(fillPreparedDocx(prepareDocx(docx), echo).bytes);
+    expect(out['word/media/photo.jpeg']).toEqual(media);
   });
 });
 

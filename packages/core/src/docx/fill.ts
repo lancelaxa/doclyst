@@ -1,5 +1,6 @@
 import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
 import { FIXED_ARCHIVE_TIMESTAMP } from '../internal/deterministic.js';
+import { withChosenLevel, type ZipEntryInput } from '../internal/compression.js';
 import { DoclystError, safeErrorSummary } from '../errors.js';
 import { extractFieldNames } from '../template/placeholder.js';
 import { extractTextFromXml, replacePlaceholdersInXml, type PlaceholderResolver } from './wordxml.js';
@@ -68,30 +69,74 @@ export interface DocxFillResult {
   readonly replaced: number;
 }
 
-/** Fill a DOCX template, resolving each placeholder through `resolve`. */
+/**
+ * A template that has been unzipped, validated and scrubbed once.
+ *
+ * Filling a template is dominated by archive work, and in a batch every record
+ * re-reads the *same* template. Doing that once and keeping the parts — along
+ * with each part's compression level, which is probed here rather than on
+ * every record — takes the repeated cost down to substituting the text parts
+ * and writing the archive.
+ */
+export interface PreparedDocx {
+  /** Parts that carry no placeholders, ready to write with a fixed level. */
+  readonly staticParts: ReadonlyMap<string, ZipEntryInput>;
+  /** Decoded XML of the parts that need substitution. */
+  readonly textParts: ReadonlyMap<string, string>;
+}
+
+/** Unzip, validate and scrub a template so a batch can reuse the result. */
+export function prepareDocx(template: Uint8Array, options: DocxFillOptions = {}): PreparedDocx {
+  const entries = openDocx(template);
+  const staticParts = new Map<string, ZipEntryInput>();
+  const textParts = new Map<string, string>();
+
+  for (const [name, bytes] of Object.entries(entries)) {
+    if (TEXT_PART_RE.test(name)) {
+      textParts.set(name, strFromU8(bytes));
+    } else if ((options.scrubMetadata ?? true) && isMetadataPart(name)) {
+      staticParts.set(name, withChosenLevel(strToU8(scrubMetadataXml(name, strFromU8(bytes)))));
+    } else {
+      staticParts.set(name, withChosenLevel(bytes));
+    }
+  }
+
+  return { staticParts, textParts };
+}
+
+/** Fill a template that has already been prepared. */
+export function fillPreparedDocx(
+  prepared: PreparedDocx,
+  resolve: PlaceholderResolver,
+): DocxFillResult {
+  const output: Record<string, Uint8Array | ZipEntryInput> = {};
+  let replaced = 0;
+
+  for (const [name, entry] of prepared.staticParts) {
+    output[name] = entry;
+  }
+  for (const [name, xml] of prepared.textParts) {
+    const result = replacePlaceholdersInXml(xml, resolve);
+    replaced += result.replaced;
+    output[name] = strToU8(result.xml);
+  }
+
+  const bytes = zipSync(output, { level: 6, mtime: FIXED_ARCHIVE_TIMESTAMP });
+  return { bytes, replaced };
+}
+
+/**
+ * Fill a DOCX template, resolving each placeholder through `resolve`.
+ *
+ * Convenience for one-off use. To fill many records from one template, call
+ * {@link prepareDocx} once and {@link fillPreparedDocx} per record.
+ */
 export function fillDocx(
   template: Uint8Array,
   resolve: PlaceholderResolver,
   options: DocxFillOptions = {},
 ): DocxFillResult {
-  const entries = openDocx(template);
-  const output: Record<string, Uint8Array> = {};
-  let replaced = 0;
-
-  for (const [name, bytes] of Object.entries(entries)) {
-    if (TEXT_PART_RE.test(name)) {
-      const result = replacePlaceholdersInXml(strFromU8(bytes), resolve);
-      replaced += result.replaced;
-      output[name] = strToU8(result.xml);
-    } else if ((options.scrubMetadata ?? true) && isMetadataPart(name)) {
-      output[name] = strToU8(scrubMetadataXml(name, strFromU8(bytes)));
-    } else {
-      output[name] = bytes;
-    }
-  }
-
-  const bytes = zipSync(output, { level: 6, mtime: FIXED_ARCHIVE_TIMESTAMP });
-  return { bytes, replaced };
+  return fillPreparedDocx(prepareDocx(template, options), resolve);
 }
 
 /** Unzip a DOCX, rejecting anything that is not a plausible Word document. */

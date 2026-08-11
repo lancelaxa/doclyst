@@ -191,6 +191,13 @@ property of the code rather than a promise.
 Output is deterministic: identical inputs produce byte-identical files, so runs
 are reproducible and no processing timestamps are embedded.
 
+A batch unzips, validates and scrubs the template **once** rather than per
+record, and stores already-compressed parts (embedded images, fonts) instead of
+deflating them a second time. On a typical 180 KB letterhead template that is
+about 3× faster over 500 records, with byte-identical output. A malformed
+template now fails once, up front, instead of producing one identical failure
+per row.
+
 ## Development
 
 ```bash

@@ -200,6 +200,14 @@ describe('runBatch', () => {
     });
   });
 
+  it('rejects a malformed template once instead of failing every row', async () => {
+    // The template is validated before any record is attempted, so a broken
+    // one surfaces as a single clear error rather than 500 identical failures.
+    await expect(
+      runBatch({ kind: 'docx', bytes: new Uint8Array([1, 2, 3, 4]) }, records),
+    ).rejects.toThrow(/not a valid DOCX/);
+  });
+
   it('handles a batch of several hundred records', async () => {
     const rows = Array.from(
       { length: 300 },

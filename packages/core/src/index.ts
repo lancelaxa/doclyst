@@ -53,11 +53,14 @@ export {
 
 export {
   fillDocx,
+  prepareDocx,
+  fillPreparedDocx,
   readDocxFields,
   readDocxText,
   MAX_TEMPLATE_BYTES,
   type DocxFillOptions,
   type DocxFillResult,
+  type PreparedDocx,
 } from './docx/fill.js';
 
 export {

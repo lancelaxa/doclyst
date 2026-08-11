@@ -1,5 +1,5 @@
 import { DoclystError, safeErrorSummary } from '../errors.js';
-import { fillDocx, readDocxFields, type DocxFillOptions } from '../docx/fill.js';
+import { fillPreparedDocx, prepareDocx, readDocxFields, type DocxFillOptions, type PreparedDocx } from '../docx/fill.js';
 import { fillPdf, readPdfFields, type PdfFillOptions } from '../pdf/fill.js';
 import { normalizeKey } from '../template/placeholder.js';
 import { ValueResolver, type MissingValuePolicy } from '../template/values.js';
@@ -96,6 +96,11 @@ export async function runBatch(
 
   const extension = template.kind === 'docx' ? '.docx' : '.pdf';
 
+  // Unzip, validate and scrub the template once rather than per record. A
+  // malformed template still fails here, before any row is attempted.
+  const prepared: PreparedDocx | undefined =
+    template.kind === 'docx' ? prepareDocx(template.bytes, options.docx ?? {}) : undefined;
+
   for (let i = 0; i < records.length; i += 1) {
     const row = i + 1;
     const record = records[i] as DataRecord;
@@ -109,8 +114,8 @@ export async function runBatch(
       const resolve = (key: string, original: string): string => resolver.resolve(key, original);
 
       const filled =
-        template.kind === 'docx'
-          ? fillDocx(template.bytes, resolve, options.docx ?? {})
+        prepared !== undefined
+          ? fillPreparedDocx(prepared, resolve)
           : await fillPdf(template.bytes, resolve, options.pdf ?? {});
 
       for (const key of resolver.missingKeys) unmatched.add(key);
