@@ -104,6 +104,7 @@ export {
   sanitizeFilename,
   buildFilename,
   checkFilenameTemplate,
+  checkFilenameFields,
   dedupeFilename,
   type BuildFilenameOptions,
   type FilenameWarning,

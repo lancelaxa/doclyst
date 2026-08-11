@@ -192,13 +192,48 @@ describe('preparePdfTemplate', () => {
     );
   });
 
-  it('reports a repeated placeholder instead of creating a broken field', async () => {
+  it('makes a repeated placeholder one field shown in every place', async () => {
+    // A company name in the letterhead and again in the closing is one value.
+    // Turning only the first into a field left the rest printed as literal
+    // `{{COMPANY_NAME}}` text on a letter about to go to a candidate.
     const result = await preparePdfTemplate(
-      await letter(['{{FULL_NAME}} here', 'and {{FULL_NAME}} again']),
+      await letter(['{{FULL_NAME}} here', 'and {{FULL_NAME}} again', 'and {{FULL_NAME}} once more']),
     );
     expect(result.fields).toHaveLength(1);
-    expect(result.skipped[0]).toMatchObject({ name: 'FULL_NAME' });
-    expect(result.skipped[0]!.reason).toContain('more than once');
+    expect(result.fields[0]).toMatchObject({ name: 'FULL_NAME', occurrences: 3 });
+    expect(result.skipped).toEqual([]);
+
+    // Every occurrence is gone from the page, not just the first.
+    expect(await pageText(result.bytes)).not.toContain('{{');
+  });
+
+  it('shows a repeated placeholder"s value everywhere it appears', async () => {
+    const prepared = await preparePdfTemplate(
+      await letter(['{{FULL_NAME}} here', 'and {{FULL_NAME}} again']),
+    );
+    const filled = await fillPdf(prepared.bytes, () => 'Aisha Rahman', {});
+    const drawn = drawnText(filled.bytes).split('\u0001').filter((part) => part.includes('Aisha'));
+    expect(drawn).toHaveLength(2);
+  });
+
+  it('sizes a repeated placeholder by its narrowest occurrence', async () => {
+    // A value that fits the wide one and not the narrow one would be clipped
+    // in the narrow one, which is the failure this whole check exists to stop.
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([595.28, 841.89]);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText('{{NAME_FIELD}} and some following words here', { x: 56, y: 760, size: 11, font });
+    page.drawText('{{NAME_FIELD}}', { x: 56, y: 730, size: 11, font });
+
+    const prepared = await preparePdfTemplate(await doc.save(), { widthFactor: 4 });
+    const wide = prepared.fields[0]!;
+    // The second occurrence has the rest of the line, the first does not.
+    expect(wide.occurrences).toBe(2);
+
+    const reports = await checkPdfTemplateFit(prepared.bytes, [
+      { NAME_FIELD: 'A considerably longer value than the placeholder' },
+    ]);
+    expect(reports[0]!.outcome).not.toBe('fits');
   });
 
   it('does not draw a border or a background the design never had', async () => {

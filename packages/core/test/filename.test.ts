@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildFilename,
+  checkFilenameFields,
   checkFilenameTemplate,
   dedupeFilename,
   sanitizeFilename,
@@ -199,5 +200,41 @@ describe('dedupeFilename', () => {
     const taken = new Set<string>();
     dedupeFilename('a', taken);
     expect(dedupeFilename('a', taken)).toBe('a (2)');
+  });
+});
+
+/**
+ * Naming files after a column that is not there.
+ *
+ * The row-number fallback is right — it keeps names distinct — but it is
+ * indistinguishable from success. Asking for `{{STAFF_ID}}-offer` against data
+ * with no staff-ID column produced `0001-offer`: a plausible name that is not
+ * the one that was asked for, with nothing said.
+ */
+describe('checkFilenameFields', () => {
+  const columns = ['Full Name', 'Basic Salary'];
+
+  it('warns about a field no column matches', () => {
+    const warnings = checkFilenameFields('{{STAFF_ID}}-offer', columns);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ kind: 'unmatched-field-in-filename', field: 'STAFF_ID' });
+    expect(warnings[0]!.message).toContain('numbered by row');
+  });
+
+  it('says nothing when every field matches, however it is written', () => {
+    expect(checkFilenameFields('{{FULL_NAME}}-{{Basic Salary}}', columns)).toEqual([]);
+  });
+
+  it('treats ROW as always available', () => {
+    expect(checkFilenameFields('letter-{{ROW}}', columns)).toEqual([]);
+  });
+
+  it('reports each missing field once, not once per occurrence', () => {
+    expect(checkFilenameFields('{{NRIC}}-{{NRIC}}', columns)).toHaveLength(1);
+  });
+
+  it('says nothing for a blank or absent pattern', () => {
+    expect(checkFilenameFields(undefined, columns)).toEqual([]);
+    expect(checkFilenameFields('   ', columns)).toEqual([]);
   });
 });

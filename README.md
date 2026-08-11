@@ -443,6 +443,9 @@ Known and deliberate, rather than hidden:
 - PDF output from a DOCX template is re-typeset, so tables, images, numbering
   and headers are not carried over, and only WinAnsi characters can be drawn.
   Both are reported before a batch runs.
+- Each filled PDF is a complete copy of its template, so total output size is
+  roughly the template size times the number of records. Filling a PDF form
+  cannot share fonts between files.
 - Encrypted or password-protected PDFs are rejected rather than silently saved
   without their protection.
 

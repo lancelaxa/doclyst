@@ -146,8 +146,25 @@ describe('runBatch', () => {
 
     it('warns when a filename template would expose an identifier', async () => {
       const result = await runBatch(template, records, { filenameTemplate: '{{NRIC}}' });
-      expect(result.warnings).toHaveLength(1);
-      expect(result.warnings[0]?.field).toBe('NRIC');
+      const kinds = result.warnings.map((warning) => warning.kind);
+      expect(kinds).toContain('sensitive-field-in-filename');
+      expect(result.warnings.every((warning) => warning.field === 'NRIC')).toBe(true);
+    });
+
+    it('warns separately when the filename field has no column at all', async () => {
+      // These records have no NRIC column, so the files would silently be
+      // numbered by row rather than named as asked.
+      const result = await runBatch(template, records, { filenameTemplate: '{{NRIC}}' });
+      expect(result.warnings.map((warning) => warning.kind)).toContain(
+        'unmatched-field-in-filename',
+      );
+    });
+
+    it('says nothing about a filename field the data does provide', async () => {
+      const result = await runBatch(template, records, { filenameTemplate: '{{STAFF_ID}}-offer' });
+      expect(result.warnings.map((warning) => warning.kind)).not.toContain(
+        'unmatched-field-in-filename',
+      );
     });
   });
 
@@ -307,7 +324,12 @@ describe('streamBatch', () => {
       }),
     );
     expect(summary.unmatchedFields.sort()).toEqual(['SALARY', 'START_DATE']);
-    expect(summary.warnings).toHaveLength(1);
+    // NRIC is both an identifier and absent from this data, so both filename
+    // warnings apply.
+    expect(summary.warnings.map((warning) => warning.kind).sort()).toEqual([
+      'sensitive-field-in-filename',
+      'unmatched-field-in-filename',
+    ]);
   });
 
   it('throws on a malformed template before yielding anything', async () => {

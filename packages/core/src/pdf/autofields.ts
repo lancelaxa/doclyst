@@ -45,12 +45,18 @@ export interface PrepareTemplateOptions {
 export interface PreparedField {
   /** Placeholder key, e.g. `CANDIDATE_NAME`. */
   readonly name: string;
-  /** 1-based page the field was placed on. */
+  /** 1-based page the field's first occurrence is on. */
   readonly page: number;
   readonly x: number;
   readonly y: number;
   readonly width: number;
   readonly height: number;
+  /**
+   * How many times the placeholder appears. A repeated one — `{{COMPANY_NAME}}`
+   * in a letterhead and again in the closing — becomes a single field with a
+   * widget at each place, so one value fills them all.
+   */
+  readonly occurrences: number;
   /** Font size the placeholder was set in, which the field inherits. */
   readonly fontSizePt: number;
   /**
@@ -108,10 +114,23 @@ export async function preparePdfTemplate(
   const alreadyPresent = new Set(existing);
   const widthFactor = options.widthFactor ?? 1;
 
-  const fields: PreparedField[] = [];
   const skipped: { name: string; reason: string }[] = [];
-  /** Page font resource each field should be drawn with, where reusable. */
-  const resourceByField = new Map<string, string>();
+
+  /** Each placeholder, with every place on the page it has to appear. */
+  interface Placed {
+    readonly widgets: {
+      readonly page: number;
+      readonly x: number;
+      readonly y: number;
+      readonly width: number;
+      readonly height: number;
+    }[];
+    readonly fontSizePt: number;
+    readonly keptFont: boolean;
+    readonly inline: boolean;
+    readonly fontResource: string;
+  }
+  const placed = new Map<string, Placed>();
 
   doc.getPages().forEach((page, pageIndex) => {
     const found = findOnPage(page);
@@ -122,17 +141,7 @@ export async function preparePdfTemplate(
 
     for (const placement of found) {
       const name = placement.key;
-      // Checked before the general name clash, because "you wrote it twice" is
-      // a different thing for the author to fix than "your template already had
-      // a field called that".
-      if (fields.some((field) => field.name === name)) {
-        skipped.push({
-          name,
-          reason: 'it appears more than once, and only the first became a field',
-        });
-        continue;
-      }
-      if (existing.has(name)) {
+      if (existing.has(name) && !placed.has(name)) {
         skipped.push({ name, reason: 'the template already has a field with this name' });
         continue;
       }
@@ -142,24 +151,48 @@ export async function preparePdfTemplate(
       // Widening is capped at the room actually there, so asking for more
       // space than the line has cannot produce overlapping text.
       const width = Math.min(placement.width * widthFactor, placement.available);
+      const widget = { page: pageIndex + 1, x: placement.x, y: placement.y, width, height: placement.height };
 
-      fields.push({
-        name,
-        page: pageIndex + 1,
-        x: placement.x,
-        y: placement.y,
-        width,
-        height: placement.height,
+      // A placeholder used more than once — a company name in the letterhead
+      // and again in the closing — is one field shown in several places, not
+      // several fields. Anything else leaves the repeats printed as literal
+      // `{{COMPANY_NAME}}` text on a letter about to be sent.
+      const already = placed.get(name);
+      if (already !== undefined) {
+        already.widgets.push(widget);
+        continue;
+      }
+
+      placed.set(name, {
+        widgets: [widget],
         fontSizePt: placement.fontSize,
         keptFont: placement.fontIsReusable,
         inline: placement.inline,
+        fontResource: placement.fontResource,
       });
-      resourceByField.set(name, placement.fontResource);
     }
 
     if (!options.keepPlaceholderText && removals.length > 0) {
       hidePlaceholders(page, removals);
     }
+  });
+
+  const fields: PreparedField[] = [...placed].map(([name, entry]) => {
+    const first = entry.widgets[0] as Placed['widgets'][number];
+    return {
+      name,
+      page: first.page,
+      x: first.x,
+      y: first.y,
+      // The narrowest occurrence governs: a value has to fit everywhere it is
+      // shown, not just the first place.
+      width: Math.min(...entry.widgets.map((widget) => widget.width)),
+      height: first.height,
+      fontSizePt: entry.fontSizePt,
+      keptFont: entry.keptFont,
+      inline: entry.inline,
+      occurrences: entry.widgets.length,
+    };
   });
 
   if (fields.length === 0 && skipped.length === 0) {
@@ -181,28 +214,30 @@ export async function preparePdfTemplate(
   const form = doc.getForm();
   const helvetica = await doc.embedFont(StandardFonts.Helvetica);
 
-  for (const field of fields) {
-    const page = doc.getPage(field.page - 1);
-    const textField = form.createTextField(field.name);
-    textField.addToPage(page, {
-      x: field.x,
-      y: field.y,
-      width: field.width,
-      height: field.height,
-      font: helvetica,
-      // A form field draws a black border and a white box unless told not to.
-      // Either would be a mark on the page that the design never had.
-      borderWidth: 0,
-      borderColor: undefined,
-      backgroundColor: undefined,
-    });
+  for (const [name, entry] of placed) {
+    const textField = form.createTextField(name);
+    for (const widget of entry.widgets) {
+      textField.addToPage(doc.getPage(widget.page - 1), {
+        x: widget.x,
+        y: widget.y,
+        width: widget.width,
+        height: widget.height,
+        font: helvetica,
+        // A form field draws a black border and a white box unless told not to.
+        // Either would be a mark on the page that the design never had.
+        borderWidth: 0,
+        borderColor: undefined,
+        backgroundColor: undefined,
+      });
+    }
 
-    // The default appearance only exists once the widget is on a page, so the
-    // font and size are applied after placing it.
-    const resource = resourceByField.get(field.name);
-    const adopted = field.keptFont && resource !== undefined
-      ? adoptPageFont(doc, page, resource)
+    // The default appearance only exists once a widget is on a page, so the
+    // font and size are applied after placing them.
+    const firstPage = doc.getPage((entry.widgets[0] as { page: number }).page - 1);
+    const adopted = entry.keptFont
+      ? adoptPageFont(doc, firstPage, entry.fontResource)
       : undefined;
+    const field = { fontSizePt: entry.fontSizePt };
 
     if (adopted !== undefined) {
       textField.acroField.setDefaultAppearance(

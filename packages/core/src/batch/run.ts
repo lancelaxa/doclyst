@@ -7,7 +7,13 @@ import { fillPdf, readPdfFields, type PdfFillOptions } from '../pdf/fill.js';
 import { normalizeKey } from '../template/placeholder.js';
 import { ValueResolver, type MissingValuePolicy } from '../template/values.js';
 import type { DataRecord } from '../data/records.js';
-import { buildFilename, checkFilenameTemplate, dedupeFilename, type FilenameWarning } from './filename.js';
+import {
+  buildFilename,
+  checkFilenameFields,
+  checkFilenameTemplate,
+  dedupeFilename,
+  type FilenameWarning,
+} from './filename.js';
 
 /** Template formats Doclyst can fill. */
 export type TemplateKind = 'docx' | 'pdf';
@@ -154,8 +160,13 @@ export async function* streamBatch(
   let generated = 0;
   let failed = 0;
 
+  // Both filename checks need saying before a run, not after: one is about
+  // disclosure, the other about getting the names you actually asked for.
   const warnings = options.filenameTemplate
-    ? checkFilenameTemplate(options.filenameTemplate)
+    ? [
+        ...checkFilenameTemplate(options.filenameTemplate),
+        ...checkFilenameFields(options.filenameTemplate, Object.keys(records[0] ?? {})),
+      ]
     : [];
 
   // A PDF template can only produce PDF; a DOCX template does whichever the

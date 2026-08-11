@@ -271,6 +271,23 @@ Position:        {{JOB_TITLE}}
 Monthly salary:  {{BASIC_SALARY}}
 ```
 
+### Repeated placeholders
+
+Use the same placeholder as often as you like. `{{COMPANY_NAME}}` in the
+letterhead and again in the closing becomes **one** field shown in both places,
+filled from one column. The value has to fit the narrowest of them, and Doclyst
+measures it that way.
+
+### How large the output gets
+
+Each filled PDF is a complete copy of the template, because that is what
+filling a PDF form produces — the fonts and images cannot be shared between
+files. Four hundred letters from a 100 KB template come to about 40 MB; from a
+1 MB template, about 400 MB.
+
+If your template is large, it is almost always the fonts. Word subsets them
+when it exports, so a letter saved from Word is usually well under 200 KB.
+
 ### Making the fields wider
 
 A real value is usually longer than `{{FULL_NAME}}`, and a form field hides

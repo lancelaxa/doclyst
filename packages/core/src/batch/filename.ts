@@ -71,9 +71,45 @@ export function sanitizeFilename(input: string, extension: string): string {
 }
 
 export interface FilenameWarning {
-  readonly kind: 'sensitive-field-in-filename';
+  readonly kind: 'sensitive-field-in-filename' | 'unmatched-field-in-filename';
   readonly field: string;
   readonly message: string;
+}
+
+/**
+ * Report filename fields that no column will fill.
+ *
+ * An unresolved field falls back to the row number, which keeps names distinct
+ * and is the right thing to do — but it is indistinguishable from success. Ask
+ * for `{{STAFF_ID}}-offer` against data with no staff-ID column and you get
+ * `0001-offer`, a plausible-looking name that is not the one you asked for.
+ */
+export function checkFilenameFields(
+  template: string | undefined,
+  available: readonly string[],
+): FilenameWarning[] {
+  if (!template || template.trim() === '') return [];
+
+  const known = new Set(available.map(normalizeForLookup));
+  const warnings: FilenameWarning[] = [];
+  const seen = new Set<string>();
+
+  for (const match of template.matchAll(/\{\{([A-Za-z0-9_.\- ]+)\}\}/g)) {
+    const field = (match[1] ?? '').trim();
+    const key = normalizeForLookup(field);
+    if (key === 'ROW' || seen.has(key) || known.has(key)) continue;
+    seen.add(key);
+    warnings.push({
+      kind: 'unmatched-field-in-filename',
+      field,
+      message: `The filename pattern uses "${field}", which no column matches. Those files will be numbered by row instead.`,
+    });
+  }
+  return warnings;
+}
+
+function normalizeForLookup(key: string): string {
+  return key.trim().replace(/[\s.\-]+/g, '_').toUpperCase();
 }
 
 /**

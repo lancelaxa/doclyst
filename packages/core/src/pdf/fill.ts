@@ -314,10 +314,9 @@ function drawFieldValue(
   const codes = font.encode(value);
   if (codes === undefined) return 'skipped';
 
-  const widget = field.acroField.getWidgets()[0];
-  if (widget === undefined) return 'skipped';
+  const widgets = field.acroField.getWidgets();
+  if (widgets.length === 0) return 'skipped';
 
-  const rectangle = widget.getRectangle();
   const width = font.bytesPerCode === 2 ? 2 : 1;
   const hex = codes
     .map((code) => code.toString(16).padStart(width * 2, '0'))
@@ -328,30 +327,31 @@ function drawFieldValue(
   // default appearance. Deciding it again here is how the two could disagree.
   const drawSize = size;
 
-  // Sit the text on a baseline that centres the cap height in the box.
-  const baseline = (rectangle.height - drawSize * 0.72) / 2;
-  const stream = [
-    '/Tx BMC',
-    'q',
-    'BT',
-    `/${fontName} ${drawSize.toFixed(2)} Tf`,
-    '0 g',
-    `2 ${baseline.toFixed(2)} Td`,
-    `<${hex}> Tj`,
-    'ET',
-    'Q',
-    'EMC',
-  ].join('\n');
+  for (const widget of widgets) {
+    const rectangle = widget.getRectangle();
+    // Sit the text on a baseline that centres the cap height in the box.
+    const baseline = (rectangle.height - drawSize * 0.72) / 2;
+    const stream = [
+      '/Tx BMC',
+      'q',
+      'BT',
+      `/${fontName} ${drawSize.toFixed(2)} Tf`,
+      '0 g',
+      `2 ${baseline.toFixed(2)} Td`,
+      `<${hex}> Tj`,
+      'ET',
+      'Q',
+      'EMC',
+    ].join('\n');
 
-  const appearance = doc.context.flateStream(stream, {
-    Type: 'XObject',
-    Subtype: 'Form',
-    BBox: [0, 0, rectangle.width, rectangle.height],
-    Resources: { Font: { [fontName]: formFonts.get(PDFName.of(fontName)) } },
-  });
-
-  const ref = doc.context.register(appearance);
-  widget.setNormalAppearance(ref);
+    const appearance = doc.context.flateStream(stream, {
+      Type: 'XObject',
+      Subtype: 'Form',
+      BBox: [0, 0, rectangle.width, rectangle.height],
+      Resources: { Font: { [fontName]: formFonts.get(PDFName.of(fontName)) } },
+    });
+    widget.setNormalAppearance(doc.context.register(appearance));
+  }
   // pdf-lib regenerates the appearance of any field still marked dirty, which
   // would replace what was just drawn with its own default font.
   form.markFieldAsClean(field.ref);
@@ -546,17 +546,23 @@ function measureFit(
   measurer: Measurer,
   minSize: number,
 ): FieldFit | undefined {
-  const widget = field.acroField.getWidgets()[0];
-  if (widget === undefined) return undefined;
+  // A field can have a widget in several places — a company name in the
+  // letterhead and again in the closing. The value has to fit all of them, so
+  // the tightest one governs.
+  const widgets = field.acroField.getWidgets();
+  if (widgets.length === 0) return undefined;
 
-  const rectangle = widget.getRectangle();
-  // pdf-lib insets the drawable area by the border, and leaves a point of
-  // padding. Matching that keeps the check aligned with what is actually drawn.
-  const border = widget.getBorderStyle()?.getWidth() ?? 0;
-  const inset = border + 1;
-  const width = rectangle.width - inset * 2;
-  const height = rectangle.height - inset * 2;
-  if (width <= 0 || height <= 0) return undefined;
+  let width = Infinity;
+  let height = Infinity;
+  for (const widget of widgets) {
+    const rectangle = widget.getRectangle();
+    // pdf-lib insets the drawable area by the border and leaves a point of
+    // padding. Matching that keeps the check aligned with what is drawn.
+    const inset = (widget.getBorderStyle()?.getWidth() ?? 0) + 1;
+    width = Math.min(width, rectangle.width - inset * 2);
+    height = Math.min(height, rectangle.height - inset * 2);
+  }
+  if (!Number.isFinite(width) || width <= 0 || height <= 0) return undefined;
 
   const declared = readFontSize(field);
   // Size 0 means the field auto-sizes; pdf-lib then picks a size itself, which
