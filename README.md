@@ -78,6 +78,14 @@ field cannot be filled. PDF stores positioned glyphs, not editable text, so
 substituting a longer value would require re-flowing the page — a half-correct
 payslip is worse than a clear error, so Doclyst reports one.
 
+**A form field clips whatever does not fit its box**, which is the format's own
+behaviour and produces a document containing a whole address while showing a
+third of it — with nothing to say so. Doclyst measures every value against the
+field before saving. By default it shrinks the text to fit, down to 6pt, and
+names the fields it had to shrink so the fix can go into the template. Below
+that the value would be present but unreadable, so the record fails instead.
+Errors name the field and never quote the value.
+
 ## Choosing the output format
 
 A DOCX template produces `.docx` by default and `.pdf` on request; a PDF

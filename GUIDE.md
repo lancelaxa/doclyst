@@ -390,6 +390,8 @@ Exit codes: `0` all good, `1` finished with some failed rows, `2` wrong usage.
 | **The workbook has no worksheet named "X"** | Sheet name typo — the message lists the real ones | Use one of the names shown |
 | **The value for "X" is not one of the options** | A PDF dropdown only accepts certain answers | Make the cell match one of the allowed options exactly |
 | **Encrypted or password-protected PDFs are not supported** | The template is locked | Remove the password, then use it as a template |
+| **The value for "X" is too long for that field** | A PDF form field is too small for the data, and a form field hides what does not fit | Widen the field in the template, tick multiline so it wraps, or shorten the value |
+| **The text was shrunk to fit these form fields** | The values fitted, but only at a smaller size | Nothing is missing; widen those fields in the template so the documents read evenly |
 | **This text cannot be written to a PDF with the built-in fonts** | A name or value uses characters outside the Western European set | Generate DOCX for that batch and convert with Word, or correct the cell if it is a stray character |
 | **This template uses tables, images, … which cannot be carried into a re-typeset PDF** | PDF output re-lays the text and cannot reproduce those | Move the content into ordinary paragraphs, or keep DOCX output |
 | **Refusing to overwrite an existing file** | Output already exists | Use a new folder, or add `--force` |

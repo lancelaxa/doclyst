@@ -152,6 +152,12 @@ template's text, so nothing from the original file's document properties,
 revision history or embedded objects reaches it in the first place. Its
 metadata is scrubbed on the same setting.
 
+A value that does not fit its form field is never silently clipped. PDF hides
+the overflow with no indication, so a truncated address would reach the data
+subject looking deliberate. Values are measured before saving, shrunk to fit
+where that stays legible, and the record fails where it does not. The error
+names the field and not the value.
+
 ## Rendering DOCX to PDF
 
 PDF output re-typesets the filled document rather than converting it, and it
