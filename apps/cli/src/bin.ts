@@ -19,11 +19,14 @@ Commands
 
 Required for fill
   --template <file>     .docx or .pdf template.
-  --data <file>         .csv file whose header names match the placeholders.
+  --data <file>         .csv or .xlsx file whose column headers match the
+                        placeholders.
   --out <dir>           Directory to write documents into (mode 0700).
   --zip <file>          Also, or instead, write a single ZIP archive.
 
 Options
+  --sheet <name|index>  Worksheet to read from an .xlsx. Defaults to the
+                        first. Ignored for .csv.
   --filename <template> Name pattern, e.g. "{{STAFF_ID}}-offer". Defaults to
                         document-0001, which discloses nothing in a listing.
   --missing <policy>    error (default) | empty | keep. How to treat a

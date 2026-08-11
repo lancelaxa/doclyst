@@ -36,7 +36,20 @@ export {
   type ParseCsvOptions,
 } from './data/csv.js';
 
-export { toRecords, readCsvRecords, type DataRecord, type RecordSet } from './data/records.js';
+export {
+  toRecords,
+  readCsvRecords,
+  readXlsxRecords,
+  type DataRecord,
+  type RecordSet,
+} from './data/records.js';
+
+export {
+  parseXlsx,
+  readSheetNames,
+  MAX_WORKBOOK_BYTES,
+  type ParseXlsxOptions,
+} from './data/xlsx.js';
 
 export {
   fillDocx,

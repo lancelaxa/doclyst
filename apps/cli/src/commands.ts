@@ -6,7 +6,9 @@ import {
   detectTemplateKind,
   escapeCsvValue,
   readCsvRecords,
+  readSheetNames,
   readTemplateFields,
+  readXlsxRecords,
   runBatch,
   type BatchResult,
   type MissingValuePolicy,
@@ -26,8 +28,8 @@ import { resolveWithin } from './paths.js';
 const FILE_MODE = 0o600;
 const DIR_MODE = 0o700;
 
-/** Data formats the CLI can read today. */
-const SUPPORTED_DATA_EXTENSIONS = new Set(['.csv']);
+/** Data formats the CLI can read. */
+const SUPPORTED_DATA_EXTENSIONS = new Set(['.csv', '.xlsx']);
 
 export interface CommandContext {
   readonly log: (message: string) => void;
@@ -58,9 +60,13 @@ export async function inspectCommand(args: ParsedArgs, ctx: CommandContext): Pro
 
   let dataFields: string[] | undefined;
   if (dataPath) {
-    const { fields, records } = await loadRecords(dataPath);
+    const { fields, records } = await loadRecords(dataPath, getString(args, 'sheet'));
     dataFields = [...fields];
     ctx.log(`Data: ${basename(dataPath)}`);
+    if (extname(dataPath).toLowerCase() === '.xlsx') {
+      const bytes = new Uint8Array(await readFile(dataPath));
+      ctx.log(`  Worksheets: ${readSheetNames(bytes).join(', ')}`);
+    }
     ctx.log(`  Rows: ${records.length}`);
     ctx.log(`  Columns (${fields.length}): ${fields.join(', ')}`);
   }
@@ -105,7 +111,7 @@ export async function fillCommand(args: ParsedArgs, ctx: CommandContext): Promis
   }
 
   const template = await loadTemplate(templatePath);
-  const { records } = await loadRecords(dataPath);
+  const { records } = await loadRecords(dataPath, getString(args, 'sheet'));
   if (records.length === 0) {
     ctx.error('The data file contains no data rows.');
     return 1;
@@ -215,7 +221,13 @@ async function loadTemplate(path: string): Promise<Template> {
   return { kind: detectTemplateKind(bytes), bytes };
 }
 
-async function loadRecords(path: string) {
+/**
+ * Read a data file into records.
+ *
+ * `sheet` selects a worksheet by name or 0-based index and is ignored for CSV.
+ * XLSX is read as bytes; CSV as UTF-8 text.
+ */
+async function loadRecords(path: string, sheet?: string) {
   const extension = extname(path).toLowerCase();
   if (!SUPPORTED_DATA_EXTENSIONS.has(extension)) {
     throw new DoclystError(
@@ -223,6 +235,15 @@ async function loadRecords(path: string) {
       `Unsupported data file type "${extension || '(none)'}". Supported: ${[...SUPPORTED_DATA_EXTENSIONS].join(', ')}.`,
     );
   }
+
+  if (extension === '.xlsx') {
+    const bytes = new Uint8Array(await readFile(path));
+    // A bare integer selects by position; anything else is a sheet name.
+    const selection =
+      sheet !== undefined && /^\d+$/.test(sheet) ? Number.parseInt(sheet, 10) : sheet;
+    return readXlsxRecords(bytes, selection === undefined ? {} : { sheet: selection });
+  }
+
   return readCsvRecords(await readFile(path, 'utf8'));
 }
 

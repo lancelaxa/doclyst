@@ -19,21 +19,29 @@ const RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
 </Relationships>`;
 
-const DOCUMENT = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
-<w:p><w:r><w:t>Dear {{NAME}},</w:t></w:r></w:p>
-<w:p><w:r><w:t>Your monthly salary is {{SALARY}}.</w:t></w:r></w:p>
-</w:body></w:document>`;
+function documentXml(placeholders: readonly string[]): string {
+  const paragraphs = placeholders
+    .map((name) => `<w:p><w:r><w:t>Field {{${name}}}.</w:t></w:r></w:p>`)
+    .join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paragraphs}</w:body></w:document>`;
+}
 
 /** The earliest timestamp the ZIP format can represent; keeps output stable. */
 const FIXED_TIMESTAMP = new Date(Date.UTC(1980, 0, 1));
 
-export function makeTemplate(): Uint8Array {
+/**
+ * Build a template requiring the given placeholders.
+ *
+ * Defaults to NAME and SALARY, matching the CSV used by most CLI tests; the
+ * XLSX fixture has different column headers and passes its own.
+ */
+export function makeTemplate(placeholders: readonly string[] = ['NAME', 'SALARY']): Uint8Array {
   return zipSync(
     {
       '[Content_Types].xml': strToU8(CONTENT_TYPES),
       '_rels/.rels': strToU8(RELS),
-      'word/document.xml': strToU8(DOCUMENT),
+      'word/document.xml': strToU8(documentXml(placeholders)),
     },
     { mtime: FIXED_TIMESTAMP },
   );

@@ -1,6 +1,7 @@
 import { DoclystError } from '../errors.js';
 import { normalizeKey } from '../template/placeholder.js';
 import { parseCsv, type ParseCsvOptions } from './csv.js';
+import { parseXlsx, type ParseXlsxOptions } from './xlsx.js';
 
 /** One row of source data, keyed by its column header. */
 export type DataRecord = Readonly<Record<string, string>>;
@@ -99,4 +100,9 @@ export function toRecords(rows: readonly (readonly string[])[]): RecordSet {
 /** Parse CSV text straight into a validated {@link RecordSet}. */
 export function readCsvRecords(text: string, options: ParseCsvOptions = {}): RecordSet {
   return toRecords(parseCsv(text, options));
+}
+
+/** Parse an XLSX workbook straight into a validated {@link RecordSet}. */
+export function readXlsxRecords(bytes: Uint8Array, options: ParseXlsxOptions = {}): RecordSet {
+  return toRecords(parseXlsx(bytes, options));
 }
