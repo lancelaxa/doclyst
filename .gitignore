@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test/coverage artifacts
+coverage/
+.vitest/
+
+# --- Sensitive data guards -------------------------------------------------
+# Doclyst processes personal data. Nothing produced by a real run should ever
+# reach version control. Only files under packages/*/test/fixtures (which must
+# contain synthetic data only) are intended to be committed.
+
+# Default output directories used by the CLI and docs
+out/
+output/
+generated/
+*.zip
+
+# Real templates and datasets dropped into the repo while developing
+/templates/
+/data/
+/samples/
+*.local.csv
+*.local.xlsx
+*.local.docx
+*.local.pdf
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+!.vscode/extensions.json
