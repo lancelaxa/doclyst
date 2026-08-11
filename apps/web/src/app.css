@@ -1,0 +1,625 @@
+/*
+ * Deliberately self-contained: system fonts only, no webfonts, no icon sets,
+ * no remote assets of any kind. Icons are inline SVG in the markup. That is
+ * what keeps the "nothing leaves this device" claim true rather than
+ * aspirational — a single font request would break it.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Neutrals carry a faint blue cast so the surfaces read as considered
+     rather than muddy, which matters for a tool handling sensitive records. */
+  --bg: #f4f5f8;
+  --bg-tint: #eceef4;
+  --surface: #ffffff;
+  --border: #e0e3ec;
+  --border-strong: #cdd2df;
+
+  --text: #14161d;
+  --text-muted: #5a6172;
+  --text-faint: #838b9c;
+
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: #eef0fe;
+  --accent-text: #ffffff;
+
+  --ok: #0f7a53;
+  --ok-soft: #e6f6ef;
+  --warn: #8a5300;
+  --warn-soft: #fff6e6;
+  --warn-border: #f0c987;
+
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 16px;
+
+  --shadow-sm: 0 1px 2px rgb(16 20 32 / 6%);
+  --shadow: 0 1px 3px rgb(16 20 32 / 7%), 0 8px 24px -12px rgb(16 20 32 / 14%);
+  --ring: 0 0 0 3px rgb(79 70 229 / 35%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d0f14;
+    --bg-tint: #14171f;
+    --surface: #171a22;
+    --border: #262b36;
+    --border-strong: #333a49;
+
+    --text: #e9ecf2;
+    --text-muted: #a2aab9;
+    --text-faint: #7c8496;
+
+    --accent: #8b87f5;
+    --accent-hover: #a09cf8;
+    --accent-soft: #1e2033;
+    --accent-text: #10121a;
+
+    --ok: #4ade80;
+    --ok-soft: #12251c;
+    --warn: #f0c777;
+    --warn-soft: #241d10;
+    --warn-border: #6b5322;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow: 0 1px 3px rgb(0 0 0 / 45%), 0 10px 28px -14px rgb(0 0 0 / 70%);
+    --ring: 0 0 0 3px rgb(139 135 245 / 40%);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* The `hidden` attribute must outrank the layout rules below: a class such as
+   `.actions { display: flex }` is more specific than the user agent's
+   `[hidden] { display: none }`, so without this, hiding in script has no
+   visible effect. */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 16px/1.6 system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.25rem 5rem;
+}
+
+/* --- masthead ---------------------------------------------------------- */
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.mark {
+  color: var(--accent);
+  display: flex;
+  flex: none;
+}
+
+.brand-text h1 {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+
+.brand-text p {
+  margin: 0.1rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.assurance {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin: 1.5rem 0 2rem;
+  padding: 0.9rem 1.05rem;
+  background: var(--ok-soft);
+  border: 1px solid color-mix(in srgb, var(--ok) 22%, transparent);
+  border-radius: var(--radius);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.assurance p {
+  margin: 0;
+}
+
+.shield {
+  color: var(--ok);
+  flex: none;
+  display: flex;
+  margin-top: 0.1rem;
+}
+
+/* --- cards ------------------------------------------------------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.4rem;
+  margin-bottom: 1.1rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.card-accent {
+  box-shadow: var(--shadow);
+  border-color: var(--border-strong);
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  margin-bottom: 1.1rem;
+}
+
+.card-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.step-num {
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.hint {
+  margin: 0.2rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.hint.indent {
+  margin: 0.5rem 0 0.25rem;
+}
+
+code {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  background: var(--bg-tint);
+  border: 1px solid var(--border);
+  padding: 0.08em 0.35em;
+  border-radius: 5px;
+}
+
+/* --- drop zones -------------------------------------------------------- */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 1.6rem 1rem;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-tint);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.dropzone:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* The file input is visually hidden, so its focus ring has to be reflected
+   onto the zone or keyboard users get no indication at all. */
+.dropzone:focus-within {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
+.dropzone.dragging {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  transform: scale(1.008);
+}
+
+.dropzone.loaded {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  background: var(--ok-soft);
+}
+
+.dz-icon {
+  color: var(--text-faint);
+}
+
+.dropzone:hover .dz-icon,
+.dropzone.dragging .dz-icon {
+  color: var(--accent);
+}
+
+.dropzone.loaded .dz-icon {
+  color: var(--ok);
+}
+
+.dz-text {
+  font-size: 0.94rem;
+}
+
+.dz-text strong {
+  font-weight: 600;
+}
+
+.dz-meta {
+  font-size: 0.8rem;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+}
+
+/* --- form controls ----------------------------------------------------- */
+
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.9rem 0;
+}
+
+.field-row label {
+  min-width: 8.5rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+input[type='text'],
+select {
+  font: inherit;
+  font-size: 0.92rem;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.7rem;
+  min-width: 16rem;
+  max-width: 100%;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+input[type='text']:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
+input[type='text']::placeholder {
+  color: var(--text-faint);
+}
+
+.toggles {
+  display: grid;
+  gap: 0.15rem;
+  margin-top: 0.9rem;
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.4rem 0.5rem;
+  margin-left: -0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.check:hover {
+  background: var(--bg-tint);
+}
+
+.check input {
+  margin-top: 0.28rem;
+  flex: none;
+  accent-color: var(--accent);
+  width: 1rem;
+  height: 1rem;
+}
+
+/* --- buttons ----------------------------------------------------------- */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 0.9rem;
+}
+
+.btn {
+  font: inherit;
+  font-size: 0.93rem;
+  font-weight: 560;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 1.05rem;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 90ms ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--bg-tint);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-text);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: transparent;
+  color: var(--accent-text);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: var(--radius-sm);
+}
+
+/* --- status ------------------------------------------------------------ */
+
+.summary,
+.results,
+.warnings {
+  font-size: 0.9rem;
+}
+
+.summary:not(:empty),
+.results:not(:empty),
+.warnings:not(:empty) {
+  margin-top: 1rem;
+}
+
+.summary p,
+.results p {
+  margin: 0.3rem 0;
+}
+
+.name {
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.fields {
+  color: var(--text-muted);
+  word-break: break-word;
+  font-size: 0.86rem;
+}
+
+/* A leading dot rather than an icon font: no assets, and it reads clearly at
+   small sizes in both themes. */
+.ok,
+.partial {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-weight: 550;
+}
+
+.ok::before,
+.partial::before {
+  content: '';
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  flex: none;
+  transform: translateY(-0.1em);
+}
+
+.ok {
+  color: var(--ok);
+}
+
+.ok::before {
+  background: var(--ok);
+}
+
+.partial {
+  color: var(--warn);
+}
+
+.partial::before {
+  background: var(--warn);
+}
+
+.warn {
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-border);
+  color: var(--warn);
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 0.8rem;
+  margin: 0.5rem 0;
+  line-height: 1.5;
+}
+
+/* --- progress ---------------------------------------------------------- */
+
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin: 1rem 0 0.25rem;
+}
+
+.bar {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-tint);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+  border-radius: 999px;
+  transition: width 150ms ease;
+}
+
+.progress-label {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* --- result lists ------------------------------------------------------ */
+
+.file-list,
+.failure-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0 0;
+  max-height: 17rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.file-list li,
+.failure-list li {
+  padding: 0.42rem 0.75rem;
+  font-size: 0.87rem;
+}
+
+.file-list li + li,
+.failure-list li + li {
+  border-top: 1px solid var(--border);
+}
+
+.file-list li:hover {
+  background: var(--bg-tint);
+}
+
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.87rem;
+  color: var(--accent);
+  text-align: left;
+  cursor: pointer;
+  word-break: break-all;
+}
+
+button.link:hover {
+  text-decoration: underline;
+}
+
+.failure-list li {
+  color: var(--warn);
+}
+
+.results h3 {
+  margin: 1.35rem 0 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.results .btn {
+  margin-top: 0.75rem;
+}
+
+/* --- footer ------------------------------------------------------------ */
+
+footer {
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+footer p {
+  margin: 0;
+}
+
+@media (max-width: 34rem) {
+  .app {
+    padding: 1.75rem 1rem 3.5rem;
+  }
+
+  .field-row label {
+    min-width: 100%;
+  }
+
+  input[type='text'],
+  select {
+    min-width: 100%;
+  }
+
+  .actions .btn {
+    flex: 1 1 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}

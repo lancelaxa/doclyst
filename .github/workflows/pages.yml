@@ -1,0 +1,112 @@
+# Build the browser app and publish it two ways, so it can be used without a
+# terminal: as a hosted page on GitHub Pages, and as a single self-contained
+# HTML file downloadable from the run's artifacts.
+#
+# Only the static app is published. No data, template or spreadsheet is
+# involved: the page does all its work in the visitor's browser, and its
+# Content-Security-Policy blocks it from making network requests at all.
+name: Build and publish the app
+
+on:
+  push:
+    branches: ['main', 'claude/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      # The browser tests drive the real page, including the single-file build
+      # opened from disk, so the browser has to be present.
+      - name: Install Chromium for the browser tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Test
+        run: npx vitest run
+
+      # Downloadable from the run page in a browser — no terminal needed.
+      - name: Upload the single-file app
+        uses: actions/upload-artifact@v4
+        with:
+          name: doclyst-single-file
+          path: apps/web/dist/doclyst.html
+          if-no-files-found: error
+
+      - name: Package the site for Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+      # Points at the download without needing anyone to know where artifacts
+      # live, since that is the route for people who have no terminal.
+      - name: Summarise how to get the app
+        run: |
+          {
+            echo "## Doclyst is built and tested"
+            echo
+            echo "**To use it without installing anything:** download the"
+            echo "\`doclyst-single-file\` artifact below, unzip it, and"
+            echo "double-click \`doclyst.html\`. It is the whole application"
+            echo "in one file — no server, works offline."
+            echo
+            echo "A hosted link is also published once GitHub Pages is enabled"
+            echo "under Settings → Pages → Source: **GitHub Actions**."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Publishing is a separate job so a failed test never reaches the live page.
+  #
+  # It does not fail the run. Until someone enables Pages under Settings →
+  # Pages → Source: GitHub Actions, this job 404s — a configuration state, not
+  # a defect, and one nobody can fix from here. Letting it redden the run would
+  # bury the fact that the app built, passed its tests, and is sitting in the
+  # artifacts ready to download.
+  deploy:
+    needs: build
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      - name: Explain a skipped deployment
+        if: steps.deployment.outcome != 'success'
+        run: |
+          {
+            echo "## Hosted page not published"
+            echo
+            echo "GitHub Pages is not enabled for this repository, so there is"
+            echo "no URL to publish to yet. Enable it under **Settings → Pages"
+            echo "→ Source: GitHub Actions**, then re-run this workflow."
+            echo
+            echo "This does not affect the \`doclyst-single-file\` artifact,"
+            echo "which is built, tested and ready to download."
+          } >> "$GITHUB_STEP_SUMMARY"

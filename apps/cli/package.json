@@ -1,0 +1,17 @@
+{
+  "name": "@doclyst/cli",
+  "version": "0.1.0",
+  "description": "Command-line batch document filling. Runs entirely on your machine.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "doclyst": "./dist/bin.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@doclyst/core": "0.1.0"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "doclyst",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Privacy-first batch document automation for PDF and DOCX templates.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm run build -w @doclyst/core -w @doclyst/cli && npm run build -w @doclyst/web",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --build --force && tsc --noEmit -p apps/web",
+    "check": "npm run typecheck && npm run build && npm test",
+    "dev:web": "npm run dev -w @doclyst/web"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "playwright": "^1.62.1",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.10"
+  }
+}

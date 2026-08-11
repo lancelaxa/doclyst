@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Doclyst — local document filling</title>
+
+    <!--
+      The privacy claim is enforced by the browser, not just promised in prose.
+
+      `connect-src 'none'` blocks fetch, XHR, WebSocket and EventSource
+      outright, so this page cannot transmit a template, a spreadsheet or a
+      field value anywhere even if some future change tried to. `form-action`
+      and `frame-src` are closed for the same reason, and there are no remote
+      scripts, styles, fonts or images to load.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none';
+               script-src 'self';
+               style-src 'self';
+               img-src 'self' data:;
+               font-src 'self';
+               connect-src 'none';
+               form-action 'none';
+               frame-src 'none';
+               object-src 'none';
+               base-uri 'none'"
+    />
+    <!--
+      Inlined as a data URI so the browser never issues a /favicon.ico request.
+      A page that claims to make no network requests should not make one for
+      its own icon.
+    -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f46e5'/%3E%3Cpath fill='%23fff' fill-rule='evenodd' d='M9 7h7.5a9 9 0 0 1 0 18H9zm4.2 3.9v10.2h3.3a5.1 5.1 0 0 0 0-10.2z'/%3E%3C/svg%3E"
+    />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Fill DOCX and PDF templates from CSV or XLSX data, entirely in your browser."
+    />
+  </head>
+  <body>
+    <div class="app">
+      <header class="masthead">
+        <div class="brand">
+          <span class="mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" width="32" height="32">
+              <rect width="32" height="32" rx="7" fill="currentColor" />
+              <path
+                fill="#fff"
+                fill-rule="evenodd"
+                d="M9 7h7.5a9 9 0 0 1 0 18H9zm4.2 3.9v10.2h3.3a5.1 5.1 0 0 0 0-10.2z"
+              />
+            </svg>
+          </span>
+          <div class="brand-text">
+            <h1>Doclyst</h1>
+            <p>Fill DOCX and PDF templates from a spreadsheet — one document per row.</p>
+          </div>
+        </div>
+
+        <div class="assurance" role="note">
+          <span class="shield" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3l7 3v6c0 4.5-3 8.3-7 9-4-.7-7-4.5-7-9V6z" />
+              <path d="M9 12l2 2 4-4" />
+            </svg>
+          </span>
+          <p>
+            <strong>Everything happens on this device.</strong> Your template, your
+            spreadsheet and every value in it stay in this browser tab. Nothing is
+            uploaded — this page is blocked from making network requests at all.
+          </p>
+        </div>
+      </header>
+
+      <main>
+        <section class="card" aria-labelledby="step-template">
+          <header class="card-head">
+            <span class="step-num" aria-hidden="true">1</span>
+            <div>
+              <h2 id="step-template">Template</h2>
+              <p class="hint">
+                A <code>.docx</code> with <code>{{PLACEHOLDERS}}</code> in the text, or a
+                <code>.pdf</code> with form fields named after your columns.
+              </p>
+            </div>
+          </header>
+
+          <label class="dropzone" id="template-drop" for="template-input">
+            <svg class="dz-icon" viewBox="0 0 24 24" width="26" height="26" fill="none"
+                 stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 3v5h5" />
+              <path d="M19 8v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7z" />
+            </svg>
+            <span class="dz-text"><strong>Choose a template</strong> or drop it here</span>
+            <span class="dz-meta">DOCX or PDF</span>
+            <input type="file" id="template-input" accept=".docx,.pdf" class="visually-hidden" />
+          </label>
+
+          <div id="template-summary" class="summary" role="status" aria-live="polite"></div>
+        </section>
+
+        <section class="card" aria-labelledby="step-data">
+          <header class="card-head">
+            <span class="step-num" aria-hidden="true">2</span>
+            <div>
+              <h2 id="step-data">Data</h2>
+              <p class="hint">
+                A <code>.csv</code> or <code>.xlsx</code> whose header row names the fields.
+              </p>
+            </div>
+          </header>
+
+          <label class="dropzone" id="data-drop" for="data-input">
+            <svg class="dz-icon" viewBox="0 0 24 24" width="26" height="26" fill="none"
+                 stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M3 9h18M9 9v11M15 9v11" />
+            </svg>
+            <span class="dz-text"><strong>Choose a spreadsheet</strong> or drop it here</span>
+            <span class="dz-meta">CSV or XLSX</span>
+            <input type="file" id="data-input" accept=".csv,.xlsx" class="visually-hidden" />
+          </label>
+
+          <div class="field-row" id="sheet-row" hidden>
+            <label for="sheet-select">Worksheet</label>
+            <select id="sheet-select"></select>
+          </div>
+
+          <div id="data-summary" class="summary" role="status" aria-live="polite"></div>
+        </section>
+
+        <section class="card" aria-labelledby="step-options">
+          <header class="card-head">
+            <span class="step-num" aria-hidden="true">3</span>
+            <div>
+              <h2 id="step-options">Options</h2>
+              <p class="hint">Sensible defaults — adjust only if you need to.</p>
+            </div>
+          </header>
+
+          <div class="field-row">
+            <label for="filename-input">File naming</label>
+            <input
+              type="text"
+              id="filename-input"
+              placeholder="document-0001 (default)"
+              spellcheck="false"
+              autocomplete="off"
+            />
+          </div>
+          <p class="hint indent">
+            Leave blank to number files by position. A filename is visible without
+            opening the file, so naming documents after an identifier discloses it to
+            anyone who can see the folder. Use <code>{{FIELD}}</code> and
+            <code>{{ROW}}</code>.
+          </p>
+          <div id="filename-warnings" class="warnings" role="status" aria-live="polite"></div>
+
+          <div class="field-row">
+            <label for="missing-select">Missing values</label>
+            <select id="missing-select">
+              <option value="error">Fail that row (recommended)</option>
+              <option value="empty">Leave blank</option>
+              <option value="keep">Leave the placeholder visible</option>
+            </select>
+          </div>
+
+          <div class="toggles">
+            <label class="check">
+              <input type="checkbox" id="empty-is-missing" />
+              <span>Treat a blank cell as a missing value</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" id="scrub-metadata" checked />
+              <span>Remove template author and company metadata from output</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" id="flatten-pdf" checked />
+              <span>Flatten PDF form fields so values cannot be edited back out</span>
+            </label>
+          </div>
+        </section>
+
+        <section class="card card-accent" aria-labelledby="step-generate">
+          <header class="card-head">
+            <span class="step-num" aria-hidden="true">4</span>
+            <div>
+              <h2 id="step-generate">Generate</h2>
+              <p class="hint">One document per row, made here on your device.</p>
+            </div>
+          </header>
+
+          <div class="actions">
+            <button type="button" id="generate" class="btn btn-primary" disabled>
+              Generate documents
+            </button>
+            <button type="button" id="save-folder" class="btn" disabled hidden>
+              Save to folder…
+            </button>
+            <button type="button" id="save-zip" class="btn" disabled hidden>
+              Save as ZIP…
+            </button>
+          </div>
+
+          <p class="hint" id="streaming-hint" hidden>
+            “Save to folder” and “Save as ZIP” write each document to disk as it is
+            made, so memory stays flat no matter how large the batch. Your browser
+            asks where to save; this page can only write to the place you pick, and
+            only for this visit.
+          </p>
+
+          <div class="progress" id="progress" hidden>
+            <div class="bar"><div class="fill" id="progress-fill"></div></div>
+            <span class="progress-label" id="progress-label"></span>
+          </div>
+
+          <div id="results" class="results" role="status" aria-live="polite"></div>
+        </section>
+      </main>
+
+      <footer>
+        <p>
+          Doclyst implements privacy and security controls that support responsible
+          handling of personal data. It is <strong>not</strong> a compliance product and
+          does not make any organisation PDPA-compliant.
+        </p>
+      </footer>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
