@@ -2,11 +2,14 @@ import {
   DoclystError,
   buildZip,
   checkFilenameTemplate,
+  checkPdfTemplateFit,
   detectTemplateKind,
   normalizeKey,
+  preparePdfTemplate,
   readCsvRecords,
   readSheetNames,
   readTemplateFields,
+  readUnsupportedForPdf,
   readXlsxRecords,
   runBatch,
   safeErrorSummary,
@@ -16,6 +19,7 @@ import {
   type BatchSummary,
   type DataRecord,
   type MissingValuePolicy,
+  type OutputFormat,
   type Template,
 } from '@doclyst/core';
 import { byId, clear, el, nextFrame, replaceChildren } from './dom.js';
@@ -77,6 +81,8 @@ const dataInput = byId<HTMLInputElement>('data-input');
 const sheetRow = byId<HTMLDivElement>('sheet-row');
 const sheetSelect = byId<HTMLSelectElement>('sheet-select');
 const filenameInput = byId<HTMLInputElement>('filename-input');
+const formatSelect = byId<HTMLSelectElement>('format-select');
+const formatWarnings = byId<HTMLDivElement>('format-warnings');
 const missingSelect = byId<HTMLSelectElement>('missing-select');
 const emptyIsMissing = byId<HTMLInputElement>('empty-is-missing');
 const scrubMetadata = byId<HTMLInputElement>('scrub-metadata');
@@ -92,6 +98,15 @@ const results = byId<HTMLDivElement>('results');
 const templateSummary = byId<HTMLDivElement>('template-summary');
 const dataSummary = byId<HTMLDivElement>('data-summary');
 const filenameWarnings = byId<HTMLDivElement>('filename-warnings');
+const fitReport = byId<HTMLDivElement>('fit-report');
+const preparePanel = byId<HTMLDivElement>('prepare-panel');
+const prepareButton = byId<HTMLButtonElement>('prepare');
+const prepareIntro = byId<HTMLParagraphElement>('prepare-intro');
+const downloadPreparedButton = byId<HTMLButtonElement>('download-prepared');
+const prepareResult = byId<HTMLDivElement>('prepare-result');
+
+/** The prepared template, kept so it can be downloaded and reused. */
+let preparedTemplate: { bytes: Uint8Array; filename: string } | undefined;
 
 // --- drag and drop -----------------------------------------------------
 
@@ -187,11 +202,92 @@ templateInput.addEventListener('change', () => {
         ? fieldList('Fields', fields)
         : warning(
             template.kind === 'pdf'
-              ? 'This PDF has no fillable form fields. Add form fields named after your columns.'
+              ? 'This PDF has no fillable form fields yet.'
               : 'No placeholders found. Add {{FIELD}} markers to the template.',
           ),
     );
+
+    // A PDF with no fields is usually one exported straight from Word with the
+    // placeholders still written into it — which Doclyst can turn into a
+    // template itself, rather than sending someone to a PDF editor.
+    preparedTemplate = undefined;
+    clear(prepareResult);
+    downloadPreparedButton.hidden = true;
+    prepareButton.hidden = false;
+    prepareIntro.hidden = false;
+    preparePanel.hidden = !(template.kind === 'pdf' && fields.length === 0);
   });
+});
+
+prepareButton.addEventListener('click', () => {
+  void withStatus(prepareResult, async () => {
+    const loaded = loadedTemplate;
+    if (loaded === undefined || loaded.template.kind !== 'pdf') return;
+
+    const result = await preparePdfTemplate(loaded.template.bytes);
+    const template: Template = { kind: 'pdf', bytes: result.bytes };
+    const fields = await readTemplateFields(template);
+
+    // The prepared file becomes the template in use, so a batch can be run
+    // straight away without a round trip through the filesystem.
+    loadedTemplate = { template, filename: loaded.filename, fields };
+    preparedTemplate = {
+      bytes: result.bytes,
+      filename: loaded.filename.replace(/\.pdf$/i, '') + '-template.pdf',
+    };
+    // The invitation and its button have done their job; leaving them would
+    // read as though nothing had happened.
+    downloadPreparedButton.hidden = false;
+    prepareButton.hidden = true;
+    prepareIntro.hidden = true;
+
+    replaceChildren(
+      templateSummary,
+      summaryLine(`${loaded.filename} — PDF, prepared`),
+      fieldList('Fields', fields),
+    );
+
+    const notes: Node[] = [
+      el('p', {
+        className: 'ok',
+        text: `Placed ${result.fields.length} field${result.fields.length === 1 ? '' : 's'}. The rest of the page is unchanged.`,
+      }),
+    ];
+    for (const skip of result.skipped) {
+      notes.push(warning(`"${skip.name}" was not turned into a field because ${skip.reason}.`));
+    }
+    const inline = result.fields.filter((field) => field.inline);
+    if (inline.length > 0) {
+      notes.push(
+        warning(
+          `${inline.length} placeholder(s) have text after them on the same line: ${inline.map((field) => field.name).join(', ')}. A PDF cannot reflow, so a short value leaves a gap before the following words and a long one shrinks to fit. Putting those placeholders on their own line in the source document avoids both.`,
+        ),
+      );
+    }
+
+    const swapped = result.fields.filter((field) => !field.keptFont);
+    if (swapped.length > 0) {
+      notes.push(
+        warning(
+          `${swapped.length} field(s) will draw their value in Helvetica, because the template's own font does not carry every letter a value might need. Check one document before sending a batch.`,
+        ),
+      );
+    }
+    notes.push(
+      el('p', {
+        className: 'fields',
+        text: 'Download the prepared template to reuse it next time without this step.',
+      }),
+    );
+    replaceChildren(prepareResult, ...notes);
+    preparePanel.hidden = false;
+    refresh();
+  });
+});
+
+downloadPreparedButton.addEventListener('click', () => {
+  if (preparedTemplate === undefined) return;
+  downloadBytes(preparedTemplate.bytes, preparedTemplate.filename);
 });
 
 dataInput.addEventListener('change', () => {
@@ -272,6 +368,51 @@ filenameInput.addEventListener('input', () => {
   replaceChildren(filenameWarnings, ...warnings.map((w) => warning(w.message)));
 });
 
+formatSelect.addEventListener('change', syncFormat);
+
+/** The format actually in effect: a PDF template can only produce PDF. */
+function outputFormat(): OutputFormat {
+  if (loadedTemplate?.template.kind === 'pdf') return 'pdf';
+  return formatSelect.value === 'pdf' ? 'pdf' : 'docx';
+}
+
+/**
+ * Reflect the template's constraints in the format control, and say up front
+ * what a PDF run would lose.
+ *
+ * Warning here rather than after the run is the point: once three hundred
+ * documents are on disk, a missing letterhead has already been discovered by
+ * whoever opens one.
+ */
+function syncFormat(): void {
+  const kind = loadedTemplate?.template.kind;
+  formatSelect.disabled = kind === 'pdf';
+  if (kind === 'pdf') formatSelect.value = 'pdf';
+
+  clear(formatWarnings);
+  if (kind === 'pdf') {
+    formatWarnings.append(
+      el('p', { className: 'fields', text: 'A PDF template always produces PDF.' }),
+    );
+    return;
+  }
+  if (kind !== 'docx' || outputFormat() !== 'pdf') return;
+
+  try {
+    const unsupported = readUnsupportedForPdf(loadedTemplate!.template);
+    if (unsupported.length > 0) {
+      formatWarnings.append(
+        warning(
+          `This template uses ${unsupported.join(', ')}, which cannot be carried into a re-typeset PDF. Generate one document and check it before running the batch.`,
+        ),
+      );
+    }
+  } catch {
+    // Whatever is wrong with the template will be reported properly when the
+    // batch runs; a warning box is not the place to raise it first.
+  }
+}
+
 // --- generating --------------------------------------------------------
 
 generateButton.addEventListener('click', () => {
@@ -327,6 +468,7 @@ async function streamToDisk(target: 'folder' | 'zip'): Promise<void> {
 
   const stream = streamBatch(loadedTemplate.template, loadedData.records, {
     missing: missingSelect.value as MissingValuePolicy,
+    outputFormat: outputFormat(),
     treatEmptyAsMissing: emptyIsMissing.checked,
     filenameTemplate: filenameInput.value.trim() || undefined,
     docx: { scrubMetadata: scrubMetadata.checked },
@@ -395,6 +537,8 @@ function showStreamResult(
     nodes.push(warning(`No column matched: ${summary.unmatchedFields.join(', ')}`));
   }
 
+  nodes.push(...unsupportedNotice(summary.unsupported), ...shrunkNotice(summary.shrunkFields));
+
   if (failures.length > 0) {
     const list = el('ul', { className: 'failure-list' });
     for (const failure of failures) {
@@ -417,6 +561,7 @@ async function generate(): Promise<void> {
   try {
     const result = await runBatch(loadedTemplate.template, loadedData.records, {
       missing: missingSelect.value as MissingValuePolicy,
+      outputFormat: outputFormat(),
       treatEmptyAsMissing: emptyIsMissing.checked,
       filenameTemplate: filenameInput.value.trim() || undefined,
       docx: { scrubMetadata: scrubMetadata.checked },
@@ -449,6 +594,8 @@ function showResults(result: BatchResult): void {
         (result.failures.length > 0 ? `, ${result.failures.length} row(s) failed` : ''),
     }),
   );
+
+  nodes.push(...unsupportedNotice(result.unsupported), ...shrunkNotice(result.shrunkFields));
 
   if (result.documents.length > 0) {
     const totalBytes = result.documents.reduce((sum, document) => sum + document.bytes.length, 0);
@@ -502,6 +649,26 @@ function showResults(result: BatchResult): void {
   replaceChildren(results, ...nodes);
 }
 
+/** Name the PDF fields the template gave too little room. */
+function shrunkNotice(fields: readonly string[]): Node[] {
+  if (fields.length === 0) return [];
+  return [
+    warning(
+      `The text was shrunk to fit these form fields: ${fields.join(', ')}. The documents are complete, but widening those fields in the template will make them read evenly.`,
+    ),
+  ];
+}
+
+/** Repeat, on the finished batch, what the template could not carry into PDF. */
+function unsupportedNotice(unsupported: readonly string[]): Node[] {
+  if (unsupported.length === 0) return [];
+  return [
+    warning(
+      `These documents were re-typeset as PDF, and the template's ${unsupported.join(', ')} could not be carried over. Check one before sending them.`,
+    ),
+  ];
+}
+
 function updateProgress(completed: number, total: number): void {
   const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
   progressFill.style.width = `${percent}%`;
@@ -520,7 +687,61 @@ function ready(): boolean {
 }
 
 function refresh(): void {
+  syncFormat();
+  void reportTemplateFit();
   setBusy(false);
+}
+
+/**
+ * Guards against an earlier, slower check overwriting a newer one when the
+ * template or data is swapped twice in quick succession.
+ */
+let fitCheckToken = 0;
+
+/**
+ * Say, before anything is generated, whether every field is big enough for the
+ * data that is going into it.
+ *
+ * A PDF form field hides whatever does not fit, and filling is per-record, so a
+ * field too narrow for one person in four hundred would otherwise surface on
+ * that row alone — after the batch had run and the letters had gone out.
+ */
+async function reportTemplateFit(): Promise<void> {
+  const token = (fitCheckToken += 1);
+  clear(fitReport);
+  if (!loadedTemplate || !loadedData) return;
+  if (loadedTemplate.template.kind !== 'pdf') return;
+
+  let reports;
+  try {
+    reports = await checkPdfTemplateFit(loadedTemplate.template.bytes, loadedData.records);
+  } catch {
+    // A template this cannot be read from will report itself properly when the
+    // batch runs; a status line is not the place to raise it first.
+    return;
+  }
+  if (token !== fitCheckToken) return;
+
+  const tight = reports.filter((report) => report.outcome !== 'fits');
+  if (tight.length === 0) {
+    fitReport.append(
+      el('p', {
+        className: 'ok',
+        text: 'Every field is big enough for the widest value in your data.',
+      }),
+    );
+    return;
+  }
+
+  for (const report of tight) {
+    fitReport.append(
+      warning(
+        report.outcome === 'overflows'
+          ? `${report.field}: too small — the widest value (row ${report.worstRow}) will not fit legibly. Widen this field in the template.`
+          : `${report.field}: tight — row ${report.worstRow} shrinks from ${report.templateSizePt}pt to ${report.fittedSizePt}pt.`,
+      ),
+    );
+  }
 }
 
 // --- presentation helpers ----------------------------------------------

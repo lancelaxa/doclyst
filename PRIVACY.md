@@ -147,6 +147,48 @@ the recipient cannot edit them back out, and the interactive field objects —
 which hold their own copy of every value — are removed rather than shipped
 alongside the rendered text. `--no-flatten` opts out.
 
+A PDF rendered from a DOCX template carries less still: it is built from the
+template's text, so nothing from the original file's document properties,
+revision history or embedded objects reaches it in the first place. Its
+metadata is scrubbed on the same setting.
+
+A value that does not fit its form field is never silently clipped. PDF hides
+the overflow with no indication, so a truncated address would reach the data
+subject looking deliberate. Values are measured before saving, shrunk to fit
+where that stays legible, and the record fails where it does not. The error
+names the field and not the value.
+
+## Preparing a PDF template
+
+Turning a PDF's `{{PLACEHOLDERS}}` into form fields rewrites the page's content
+stream to drop those glyphs. The stream being replaced is **deleted**, not left
+unreferenced: an orphaned stream is invisible to a reader and perfectly legible
+to anything that inflates the file, so leaving it would keep a copy of the text
+that was just removed. Nothing is covered over — covering leaves the words in
+the file and visible the moment the cover is taken off.
+
+This runs in the same process as everything else, on the machine holding the
+file. No page, glyph or field name is sent anywhere.
+
+## Rendering DOCX to PDF
+
+PDF output re-typesets the filled document rather than converting it, and it
+does so in the same process as everything else — no conversion service, no
+headless Office, no upload. That is the reason for the approach: an accurate
+conversion would need a layout engine that cannot run in a browser, and the
+alternatives all involve sending the document somewhere.
+
+Two consequences are surfaced rather than hidden, because both are the kind of
+thing that is only noticed after a document has been sent:
+
+- Content the renderer cannot reproduce — tables, images, automatic numbering,
+  and headers and footers — is detected in the template and reported before the
+  batch runs.
+- Text outside the WinAnsi character set cannot be written with PDF's built-in
+  fonts. That row fails; the batch continues. The error **counts** the
+  offending characters and does not quote them, because the text that failed is
+  most often somebody's name.
+
 ## Handling hostile input
 
 Both the template and the data file are treated as untrusted.

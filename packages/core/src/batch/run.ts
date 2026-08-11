@@ -1,5 +1,8 @@
 import { DoclystError, safeErrorSummary } from '../errors.js';
 import { fillPreparedDocx, prepareDocx, readDocxFields, type DocxFillOptions, type PreparedDocx } from '../docx/fill.js';
+import { extractDocumentModel } from '../docx/model.js';
+import { replacePlaceholdersInXml } from '../docx/wordxml.js';
+import { renderModelToPdf, type PdfRenderOptions } from '../pdf/render.js';
 import { fillPdf, readPdfFields, type PdfFillOptions } from '../pdf/fill.js';
 import { normalizeKey } from '../template/placeholder.js';
 import { ValueResolver, type MissingValuePolicy } from '../template/values.js';
@@ -31,8 +34,21 @@ export async function readTemplateFields(template: Template): Promise<string[]> 
   return template.kind === 'docx' ? readDocxFields(template.bytes) : readPdfFields(template.bytes);
 }
 
+/** File format the batch produces. */
+export type OutputFormat = 'docx' | 'pdf';
+
 export interface BatchOptions {
   readonly missing?: MissingValuePolicy;
+  /**
+   * Format to write. Defaults to matching the template.
+   *
+   * A DOCX template can produce PDF: the filled document is re-typeset rather
+   * than converted, because converting Word layout needs a layout engine that
+   * cannot run in a browser. A PDF template always produces PDF.
+   */
+  readonly outputFormat?: OutputFormat;
+  /** Typesetting options, used only when a DOCX template produces PDF. */
+  readonly pdfRender?: PdfRenderOptions;
   readonly treatEmptyAsMissing?: boolean;
   /** Filename template, e.g. `{{STAFF_ID}}-offer`. Defaults to `document-0001`. */
   readonly filenameTemplate?: string;
@@ -75,6 +91,16 @@ export interface BatchFailure {
 export interface BatchResult {
   readonly documents: readonly GeneratedDocument[];
   readonly failures: readonly BatchFailure[];
+  /**
+   * Template features that could not be carried into a re-typeset PDF, such
+   * as tables or images. Empty unless a DOCX template produced PDF.
+   */
+  readonly unsupported: readonly string[];
+  /**
+   * PDF form fields whose text had to be shrunk to fit the box the template
+   * gives them. Field names only, never values.
+   */
+  readonly shrunkFields: readonly string[];
   /** Template fields with no matching column, as normalized keys. */
   readonly unmatchedFields: readonly string[];
   readonly warnings: readonly FilenameWarning[];
@@ -89,6 +115,16 @@ export type BatchEvent =
 export interface BatchSummary {
   readonly generated: number;
   readonly failed: number;
+  /**
+   * Template features that could not be carried into a re-typeset PDF, such
+   * as tables or images. Empty unless a DOCX template produced PDF.
+   */
+  readonly unsupported: readonly string[];
+  /**
+   * PDF form fields whose text had to be shrunk to fit the box the template
+   * gives them. Field names only, never values.
+   */
+  readonly shrunkFields: readonly string[];
   /** Template fields with no matching column, as normalized keys. */
   readonly unmatchedFields: readonly string[];
   readonly warnings: readonly FilenameWarning[];
@@ -114,6 +150,7 @@ export async function* streamBatch(
 ): AsyncGenerator<BatchEvent, BatchSummary, void> {
   const takenNames = new Set<string>();
   const unmatched = new Set<string>();
+  const shrunk = new Set<string>();
   let generated = 0;
   let failed = 0;
 
@@ -121,12 +158,21 @@ export async function* streamBatch(
     ? checkFilenameTemplate(options.filenameTemplate)
     : [];
 
-  const extension = template.kind === 'docx' ? '.docx' : '.pdf';
+  // A PDF template can only produce PDF; a DOCX template does whichever the
+  // caller asked for.
+  const format: OutputFormat =
+    template.kind === 'pdf' ? 'pdf' : (options.outputFormat ?? 'docx');
+  const extension = format === 'pdf' ? '.pdf' : '.docx';
 
   // Unzip, validate and scrub the template once rather than per record. A
   // malformed template still fails here, before any row is attempted.
   const prepared: PreparedDocx | undefined =
     template.kind === 'docx' ? prepareDocx(template.bytes, options.docx ?? {}) : undefined;
+
+  // The body XML is the one part re-typesetting needs, and the features it
+  // cannot represent are the same for every record, so they are found once.
+  const bodyXml = prepared?.textParts.get('word/document.xml');
+  const unsupported = prepared && format === 'pdf' ? unsupportedForPdf(prepared) : [];
 
   for (let i = 0; i < records.length; i += 1) {
     const row = i + 1;
@@ -140,10 +186,24 @@ export async function* streamBatch(
       });
       const resolve = (key: string, original: string): string => resolver.resolve(key, original);
 
-      const filled =
-        prepared !== undefined
-          ? fillPreparedDocx(prepared, resolve)
-          : await fillPdf(template.bytes, resolve, options.pdf ?? {});
+      let bytes: Uint8Array;
+      if (prepared !== undefined && format === 'pdf') {
+        // Substitute into the body XML and typeset the result directly. This
+        // skips building a .docx that would only be thrown away.
+        const substituted = replacePlaceholdersInXml(bodyXml ?? '', resolve).xml;
+        bytes = await renderModelToPdf(extractDocumentModel(substituted), {
+          ...(options.pdfRender ?? {}),
+          scrubMetadata: options.docx?.scrubMetadata ?? true,
+        });
+      } else if (prepared !== undefined) {
+        bytes = fillPreparedDocx(prepared, resolve).bytes;
+      } else {
+        const filled = await fillPdf(template.bytes, resolve, options.pdf ?? {});
+        bytes = filled.bytes;
+        // Which fields were tight is a property of the template, not the row,
+        // so it is collected once for the batch rather than repeated per record.
+        for (const field of filled.shrunkFields) shrunk.add(field);
+      }
 
       for (const key of resolver.missingKeys) unmatched.add(key);
 
@@ -158,7 +218,7 @@ export async function* streamBatch(
       );
 
       generated += 1;
-      yield { type: 'document', document: { row, filename, bytes: filled.bytes } };
+      yield { type: 'document', document: { row, filename, bytes } };
     } catch (error) {
       failed += 1;
       yield { type: 'failure', failure: toFailure(row, error) };
@@ -171,6 +231,8 @@ export async function* streamBatch(
   return {
     generated,
     failed,
+    unsupported,
+    shrunkFields: [...shrunk],
     unmatchedFields: [...unmatched].map(normalizeKey),
     warnings,
   };
@@ -202,9 +264,42 @@ export async function runBatch(
   return {
     documents,
     failures,
+    unsupported: next.value.unsupported,
+    shrunkFields: next.value.shrunkFields,
     unmatchedFields: next.value.unmatchedFields,
     warnings: next.value.warnings,
   };
+}
+
+/**
+ * List what a DOCX template would lose if it were rendered to PDF.
+ *
+ * Rendering re-typesets the body text, so anything that is not body text goes
+ * missing. Reporting it before a run matters more than it might sound: a
+ * dropped letterhead or a dropped salary table is not obvious in a folder of
+ * three hundred documents, and is very obvious to the person who receives one.
+ */
+export function readUnsupportedForPdf(template: Template): readonly string[] {
+  if (template.kind !== 'docx') return [];
+  return unsupportedForPdf(prepareDocx(template.bytes, {}));
+}
+
+function unsupportedForPdf(prepared: PreparedDocx): readonly string[] {
+  const body = prepared.textParts.get('word/document.xml');
+  const found = new Set(body ? extractDocumentModel(body).unsupported : []);
+
+  // Headers and footers are separate parts and are not rendered at all, so a
+  // letterhead would silently vanish.
+  for (const [name, xml] of prepared.textParts) {
+    if (name === 'word/document.xml') continue;
+    if (!/^word\/(header|footer)\d+\.xml$/.test(name)) continue;
+    if (extractDocumentModel(xml).paragraphs.some((p) => p.runs.length > 0)) {
+      found.add('headers and footers');
+      break;
+    }
+  }
+
+  return [...found];
 }
 
 /** Convert a thrown value into a failure record that carries no personal data. */

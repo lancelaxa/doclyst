@@ -78,6 +78,83 @@ field cannot be filled. PDF stores positioned glyphs, not editable text, so
 substituting a longer value would require re-flowing the page — a half-correct
 payslip is worse than a clear error, so Doclyst reports one.
 
+**A form field clips whatever does not fit its box**, which is the format's own
+behaviour and produces a document containing a whole address while showing a
+third of it — with nothing to say so. Doclyst measures every value against the
+field before saving. By default it shrinks the text to fit, down to 6pt, and
+names the fields it had to shrink so the fix can go into the template. Below
+that the value would be present but unreadable, so the record fails instead.
+Errors name the field and never quote the value.
+
+## Keeping a template's exact appearance
+
+Two routes produce PDF, and they trade off differently:
+
+| | DOCX template → PDF | PDF template → PDF |
+|---|---|---|
+| Appearance | Re-typeset; close, not identical | **Exact** — your file is filled, not rebuilt |
+| Logo, fonts, letterhead | Not carried over | Preserved |
+| Tables, images, headers/footers | Not carried over | Preserved |
+| Long values | Reflow naturally | Must fit the field; checked in advance |
+| Editing the template | Word | Word, then add form fields once |
+
+**For anything a candidate, employee or regulator will see, use a PDF
+template.** Design the letter in Word with `{{PLACEHOLDERS}}` in it, save as
+PDF, and let Doclyst turn it into a fillable template:
+
+```bash
+doclyst prepare --template offer.pdf --out offer-template.pdf --widen 1.5
+```
+
+or press **Prepare this template** in the browser. Every placeholder is found
+where it sits, taken off the page, and replaced by a form field at the same
+position, size and typeface — no PDF editor, and nothing else on the page
+moves by so much as a point. The design survives because Word did the layout
+and Doclyst never re-creates it.
+
+One thing to know when writing the template: a PDF cannot reflow, so a
+placeholder in the middle of a sentence becomes a fixed box — a short value
+leaves a gap and a long one shrinks. Give each placeholder its own line, or put
+it at the end of one. Doclyst reports the ones that are not.
+
+Load the template and the data together and Doclyst measures every field
+against the widest value your data actually contains, before generating
+anything — so a field too narrow for one person in four hundred is found now
+rather than after the letters have gone out. The report names the field and the
+row, never the value.
+
+## Choosing the output format
+
+A DOCX template produces `.docx` by default and `.pdf` on request; a PDF
+template always produces PDF.
+
+```bash
+--output pdf        # in the browser: Options → Output format
+```
+
+PDF output is **re-typeset, not converted**. Doclyst reads the filled
+document's text — its paragraphs, bold and italic, explicit font sizes and
+alignment — and lays it out afresh in the PDF. The wording is exactly the
+wording in the template; the appearance will not match Word pixel for pixel.
+
+That choice is deliberate. Converting Word layout faithfully needs a layout
+engine, and there is no layout engine that runs in a browser tab — the only
+alternative would have been to send documents to a conversion service, which
+is precisely what this tool exists to avoid.
+
+Two limits follow from it, and both are reported rather than left to be
+discovered:
+
+- **Tables, images, automatic numbering, and headers and footers are not
+  carried over.** Doclyst inspects the template before the run and warns if it
+  uses any of them, in the browser as soon as you pick PDF, and on the command
+  line before the first file is written.
+- **Only the Western European character set is available.** PDF's built-in
+  fonts cover WinAnsi, so a name in Chinese, Tamil or another non-Latin script
+  fails that row with a clear message rather than producing a document with
+  missing glyphs — a mangled contract is worse than a failed one. The rest of
+  the batch is unaffected. If your data needs those scripts, use DOCX output.
+
 ## Providing data
 
 CSV or XLSX, with the header row naming the fields:

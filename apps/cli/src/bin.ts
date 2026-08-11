@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { DoclystError, safeErrorSummary } from '@doclyst/core';
 import { parseArgs } from './args.js';
-import { fillCommand, inspectCommand, type CommandContext } from './commands.js';
+import { fillCommand, inspectCommand, prepareCommand, type CommandContext } from './commands.js';
 
 const HELP = `doclyst — privacy-first batch document filling
 
@@ -10,11 +10,16 @@ const HELP = `doclyst — privacy-first batch document filling
 
 Usage
   doclyst inspect --template <file> [--data <file>]
+  doclyst prepare --template <file.pdf> --out <file.pdf>
   doclyst fill --template <file> --data <file> (--out <dir> | --zip <file>) [options]
 
 Commands
   inspect    List a template's placeholders and a data file's columns, and
              report any placeholder no column can fill.
+  prepare    Turn a PDF that still contains {{PLACEHOLDER}} text into a
+             fillable template, putting a form field where each placeholder
+             sits. Design the letter in Word, save it as PDF, prepare it here.
+             The page is untouched apart from the placeholders themselves.
   fill       Render one document per data row.
 
 Required for fill
@@ -24,6 +29,12 @@ Required for fill
   --out <dir>           Directory to write documents into (mode 0700).
   --zip <file>          Also, or instead, write a single ZIP archive.
 
+Options for prepare
+  --widen <factor>      Make each field wider than the placeholder it
+                        replaces, e.g. 1.5. Defaults to 1. A form field hides
+                        what does not fit, and a real value is usually longer
+                        than "{{NAME}}".
+
 Options
   --sheet <name|index>  Worksheet to read from an .xlsx. Defaults to the
                         first. Ignored for .csv.
@@ -31,6 +42,11 @@ Options
                         document-0001, which discloses nothing in a listing.
   --missing <policy>    error (default) | empty | keep. How to treat a
                         placeholder with no value.
+  --output <format>     docx (default) | pdf. A .docx template can produce
+                        PDF, which is re-typeset rather than converted, so
+                        tables, images and numbering are not carried over —
+                        the run says so if the template uses them. A .pdf
+                        template always produces PDF.
   --empty-is-missing    Treat a blank cell as a missing value.
   --stop-on-error       Abort at the first failing row instead of continuing.
   --dry-run             Report what would be produced; write nothing.
@@ -59,6 +75,8 @@ async function main(argv: readonly string[]): Promise<number> {
   switch (args.command) {
     case 'inspect':
       return inspectCommand(args, ctx);
+    case 'prepare':
+      return prepareCommand(args, ctx);
     case 'fill':
       return fillCommand(args, ctx);
     default:

@@ -7,7 +7,8 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unzipSync } from 'fflate';
 import { readDocxText } from '@doclyst/core';
-import { makeTemplate } from './helpers/template.js';
+import { makeTemplate, makePdfTemplate, makePlaceholderPdf } from './helpers/template.js';
+import { pdfText } from './helpers/pdftext.js';
 import { installFakeFileSystem, removeFileSystemAccess } from './helpers/fake-fs.js';
 
 /**
@@ -115,6 +116,16 @@ async function loadInputs(page: Page): Promise<void> {
   });
 }
 
+/** Read the bytes of the first document offered for download. */
+async function downloadFirst(page: Page): Promise<Uint8Array> {
+  const download = page.waitForEvent('download');
+  await page.locator('.file-list button').first().click();
+  const stream = await (await download).createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  return new Uint8Array(Buffer.concat(chunks));
+}
+
 describe('the built page', () => {
   it('loads without console errors', async () => {
     const errors: string[] = [];
@@ -201,6 +212,230 @@ describe('the built page', () => {
     // One person's data must not appear in another's document.
     expect(text).not.toContain('Wei Lun Tan');
     await page.close();
+  });
+
+  describe('preparing a PDF that still has placeholders in it', () => {
+    async function loadPlaceholderPdf(page: Page): Promise<void> {
+      await page.setInputFiles('#template-input', {
+        name: 'offer.pdf',
+        mimeType: 'application/pdf',
+        buffer: Buffer.from(await makePlaceholderPdf()),
+      });
+    }
+
+    it('offers to prepare a PDF that has no fields yet', async () => {
+      const { page } = await openPage();
+      await loadPlaceholderPdf(page);
+      await expect.poll(() => page.locator('#prepare-panel').isVisible()).toBe(true);
+      await page.close();
+    });
+
+    it('does not offer it for a PDF that already has fields', async () => {
+      const { page } = await openPage();
+      await page.setInputFiles('#template-input', {
+        name: 'form.pdf',
+        mimeType: 'application/pdf',
+        buffer: Buffer.from(await makePdfTemplate([{ name: 'FULL_NAME', width: 300 }])),
+      });
+      await expect.poll(() => page.textContent('#template-summary')).toContain('FULL_NAME');
+      expect(await page.locator('#prepare-panel').isVisible()).toBe(false);
+      await page.close();
+    });
+
+    it('creates the fields and reports what it placed', async () => {
+      const { page } = await openPage();
+      await loadPlaceholderPdf(page);
+      await page.click('#prepare');
+
+      await expect.poll(() => page.textContent('#prepare-result')).toContain('Placed');
+      const summary = await page.textContent('#template-summary');
+      expect(summary).toContain('FULL_NAME');
+      expect(summary).toContain('JOB_TITLE');
+      await page.close();
+    });
+
+    it('stops inviting you to prepare once it is prepared', async () => {
+      const { page } = await openPage();
+      await loadPlaceholderPdf(page);
+      await page.click('#prepare');
+      await expect.poll(() => page.textContent('#prepare-result')).toContain('Placed');
+
+      expect(await page.locator('#prepare').isVisible()).toBe(false);
+      expect(await page.locator('#prepare-intro').isVisible()).toBe(false);
+      expect(await page.locator('#download-prepared').isVisible()).toBe(true);
+      await page.close();
+    });
+
+    it('offers to prepare again after a different template is loaded', async () => {
+      const { page } = await openPage();
+      await loadPlaceholderPdf(page);
+      await page.click('#prepare');
+      await expect.poll(() => page.textContent('#prepare-result')).toContain('Placed');
+
+      await loadPlaceholderPdf(page);
+      await expect.poll(() => page.locator('#prepare').isVisible()).toBe(true);
+      expect(await page.locator('#download-prepared').isVisible()).toBe(false);
+      await page.close();
+    });
+
+    it('generates documents straight from the prepared template', async () => {
+      const { page } = await openPage();
+      await loadPlaceholderPdf(page);
+      await page.click('#prepare');
+      await expect.poll(() => page.textContent('#prepare-result')).toContain('Placed');
+
+      await page.setInputFiles('#data-input', {
+        name: 'staff.csv',
+        mimeType: 'text/csv',
+        buffer: Buffer.from('Full Name,Job Title\nAisha Rahman,Data Analyst\n'),
+      });
+      await page.click('#generate');
+      await expect.poll(() => page.textContent('#results')).toContain('1 document ready');
+      await page.close();
+    });
+
+    it('sends nothing off the page while preparing', async () => {
+      const { page, requests } = await openPage();
+      await loadPlaceholderPdf(page);
+      await page.click('#prepare');
+      await expect.poll(() => page.textContent('#prepare-result')).toContain('Placed');
+      expect(offOriginRequests(requests)).toEqual([]);
+      await page.close();
+    });
+  });
+
+  describe('checking a PDF template against the data', () => {
+    async function loadPdfTemplate(
+      page: Page,
+      fields: readonly { readonly name: string; readonly width: number }[],
+    ): Promise<void> {
+      await page.setInputFiles('#template-input', {
+        name: 'letter.pdf',
+        mimeType: 'application/pdf',
+        buffer: Buffer.from(await makePdfTemplate(fields)),
+      });
+      await page.setInputFiles('#data-input', {
+        name: 'staff.csv',
+        mimeType: 'text/csv',
+        buffer: Buffer.from(CSV),
+      });
+    }
+
+    it('confirms when every field is big enough for the data', async () => {
+      const { page } = await openPage();
+      await loadPdfTemplate(page, [{ name: 'FULL_NAME', width: 300 }]);
+      await expect.poll(() => page.textContent('#fit-report')).toContain('big enough');
+      await page.close();
+    });
+
+    it('names a field too narrow for the data, and the row that proves it', async () => {
+      const { page } = await openPage();
+      await loadPdfTemplate(page, [{ name: 'FULL_NAME', width: 34 }]);
+      const report = await expect
+        .poll(() => page.textContent('#fit-report'))
+        .toContain('FULL_NAME');
+      void report;
+      expect(await page.textContent('#fit-report')).toMatch(/row \d/);
+      await page.close();
+    });
+
+    it('never puts a value in the report, only a row number', async () => {
+      const { page } = await openPage();
+      await loadPdfTemplate(page, [{ name: 'FULL_NAME', width: 34 }]);
+      await expect.poll(() => page.textContent('#fit-report')).toContain('FULL_NAME');
+      expect(await page.textContent('#fit-report')).not.toContain('Aisha');
+      await page.close();
+    });
+
+    it('says nothing about field sizes for a DOCX template', async () => {
+      const { page } = await openPage();
+      await loadInputs(page);
+      await expect.poll(() => page.textContent('#data-summary')).toContain('3 rows');
+      expect(await page.textContent('#fit-report')).toBe('');
+      await page.close();
+    });
+  });
+
+  describe('PDF output', () => {
+    it('writes PDFs, named .pdf, when PDF is chosen', async () => {
+      const { page } = await openPage();
+      await loadInputs(page);
+      await page.selectOption('#format-select', 'pdf');
+      await page.click('#generate');
+
+      await expect.poll(() => page.textContent('#results')).toContain('3 documents ready');
+      expect(await page.textContent('.file-list')).toContain('document-0001.pdf');
+      await page.close();
+    });
+
+    it('produces a PDF whose content is correctly substituted', async () => {
+      const { page } = await openPage();
+      await loadInputs(page);
+      await page.selectOption('#format-select', 'pdf');
+      await page.click('#generate');
+      await expect.poll(() => page.textContent('#results')).toContain('documents ready');
+
+      const bytes = await downloadFirst(page);
+      expect(Buffer.from(bytes.slice(0, 5)).toString()).toBe('%PDF-');
+
+      const text = pdfText(bytes);
+      expect(text).toContain('Aisha Rahman');
+      expect(text).toContain('4500');
+      // One person's data must not appear in another's document.
+      expect(text).not.toContain('Wei Lun Tan');
+      await page.close();
+    });
+
+    it('locks the format to PDF for a PDF template, which cannot become Word', async () => {
+      const { page } = await openPage();
+      await page.setInputFiles('#template-input', {
+        name: 'form.pdf',
+        mimeType: 'application/pdf',
+        buffer: Buffer.from(await makePdfTemplate()),
+      });
+      await expect.poll(() => page.textContent('#template-summary')).toContain('PDF');
+      expect(await page.locator('#format-select').isDisabled()).toBe(true);
+      expect(await page.inputValue('#format-select')).toBe('pdf');
+      await page.close();
+    });
+
+    it('warns before the run when PDF output would drop part of the template', async () => {
+      // After three hundred documents are on disk, a missing table has already
+      // been found by whoever opened one.
+      const { page } = await openPage();
+      await page.setInputFiles('#template-input', {
+        name: 'offer.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        buffer: Buffer.from(makeTemplate(['FULL_NAME', 'BASIC_SALARY'], { withTable: true })),
+      });
+      await page.selectOption('#format-select', 'pdf');
+      await expect.poll(() => page.textContent('#format-warnings')).toContain('tables');
+      await page.close();
+    });
+
+    it('says nothing about unsupported features while Word output is selected', async () => {
+      const { page } = await openPage();
+      await page.setInputFiles('#template-input', {
+        name: 'offer.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        buffer: Buffer.from(makeTemplate(['FULL_NAME', 'BASIC_SALARY'], { withTable: true })),
+      });
+      await expect.poll(() => page.textContent('#template-summary')).toContain('FULL_NAME');
+      expect(await page.textContent('#format-warnings')).toBe('');
+      await page.close();
+    });
+
+    it('still sends nothing off the page when rendering PDF', async () => {
+      // The whole privacy claim, restated for the path that re-typesets.
+      const { page, requests } = await openPage();
+      await loadInputs(page);
+      await page.selectOption('#format-select', 'pdf');
+      await page.click('#generate');
+      await expect.poll(() => page.textContent('#results')).toContain('documents ready');
+
+      expect(offOriginRequests(requests)).toEqual([]);
+      await page.close();
+    });
   });
 
   it('packs every document into a downloadable ZIP', async () => {

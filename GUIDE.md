@@ -199,7 +199,8 @@ documents:
 4. Look for the green line: *“Every template placeholder has a matching
    column.”* If instead you see **“No column matches: …”**, fix that before
    generating — otherwise every row will fail.
-5. Adjust anything under **Options** (most people do not need to).
+5. Adjust anything under **Options** (most people do not need to). If you
+   need PDFs rather than Word files, set **Output format** to *PDF*.
 6. Press **Generate documents**, then download them individually or as a ZIP.
 
 Nothing is uploaded at any point. The page is blocked by the browser from
@@ -211,6 +212,169 @@ Always open one or two generated documents before sending anything. The most
 common mistakes — a column mapped to the wrong placeholder, a date in an
 unexpected format, a missing currency symbol — are obvious on sight and
 invisible in a summary.
+
+---
+
+## Keeping your letterhead exactly as designed
+
+Use a **PDF template**. This is the only route that preserves appearance
+exactly, because Doclyst fills your actual PDF — the design is not
+reproduced, it *is* the original file. Fonts, logo, spacing, margins and
+signature block come out identical, every time.
+
+Word templates are more convenient to edit; PDF templates are what you want
+for anything a candidate, employee or regulator will see.
+
+### Making one from your existing Word letter
+
+1. **Open your letter in Word** and write `{{PLACEHOLDERS}}` where the variable
+   values go — `{{FULL_NAME}}`, `{{BASIC_SALARY}}`. Name them after your
+   spreadsheet columns. Leave the design alone.
+2. **File → Save as → PDF.** Word does the layout, so the result looks exactly
+   like the Word document. This is the step that preserves the appearance.
+3. **Drop the PDF into Doclyst and press “Prepare this template”.** It finds
+   every placeholder, takes the text off the page, and puts a fillable field in
+   its place — same position, same size, same typeface. Download the prepared
+   template and reuse it for every batch after that.
+4. **Check it** against your data — see below.
+
+No PDF editor needed. On the command line the same step is:
+
+```bash
+node apps/cli/dist/bin.js prepare \
+  --template offer-letter.pdf \
+  --out offer-letter-template.pdf \
+  --widen 1.5
+```
+
+`--widen` makes each field wider than the placeholder it replaces, since a real
+value is usually longer than `{{FULL_NAME}}`. Fields are never widened over the
+text that follows them on a line.
+
+### Where to put the placeholders
+
+**Give a placeholder its own line, or put it at the end of one.** This matters
+more than it sounds. A PDF cannot reflow: a field is a fixed box, so the words
+after it on the same line do not move. If a placeholder sits mid-sentence:
+
+- a **short** value leaves a visible gap before the following words;
+- a **long** value has to shrink to fit rather than pushing them along.
+
+Doclyst tells you which placeholders have text after them on the same line, so
+you can move them in the Word document and prepare it again. Laid out as a form
+— label on the left, value on the right — every field is free of the problem:
+
+```
+Name:            {{FULL_NAME}}
+Position:        {{JOB_TITLE}}
+Monthly salary:  {{BASIC_SALARY}}
+```
+
+### If you would rather place the fields yourself
+
+Any PDF editor will do it — Acrobat (Prepare a Form), LibreOffice Draw (free),
+or Xournal++. Name each field after your spreadsheet column; either `NAME` or
+`{{NAME}}` works. Make the boxes generous, and turn on multiline for addresses
+so long ones wrap. Doclyst fills a hand-made template exactly the same way.
+
+### Changing a template later
+
+**Keep the Word document. It is the master.** The prepared PDF is built from
+it, the way a compiled file is built from source — you edit the Word file and
+prepare again, never the PDF.
+
+To change the wording, add a clause, or add a new field:
+
+1. Edit the **Word** document. To add a field, type a new `{{PLACEHOLDER}}`
+   named after the spreadsheet column that will fill it.
+2. Save as PDF again.
+3. Prepare it again, and use the new template.
+4. Load it with your spreadsheet — Doclyst re-checks that every placeholder has
+   a matching column and that every field is big enough. A column you have not
+   added yet shows up here, not halfway through a batch.
+
+Field names come from the placeholders, so as long as you do not rename one,
+your existing spreadsheet keeps working. Rename a placeholder and you must
+rename the column to match — Doclyst will tell you if you forget.
+
+If you feed a prepared template back in by mistake, Doclyst recognises it and
+says so rather than reporting a fault in your document.
+
+**Keep the old template until the new one is checked.** Name them so you can
+tell which is which — `offer-letter-2026-08.pdf` — and you can always go back
+to the version a batch was actually produced with.
+
+### Checking the template before you use it
+
+Load the PDF template **and** your spreadsheet into Doclyst. It measures every
+field against the widest value in your actual data and tells you straight away:
+
+- *“Every field is big enough for the widest value in your data.”* — good to go.
+- *“BASIC_SALARY: tight — row 12 shrinks from 11pt to 9pt.”* — nothing will be
+  missing, but that field will look smaller than the rest. Widen it.
+- *“CANDIDATE_ADDRESS: too small — the widest value (row 12) will not fit
+  legibly.”* — **fix this before generating.** Widen the field or enable
+  multiline.
+
+On the command line the same check runs as part of `inspect`, and a field that
+cannot fit exits non-zero so a scheduled job stops rather than sending letters
+with a missing address.
+
+The report names the **field and the row**, never the value, so it is safe to
+paste into a ticket.
+
+### What Doclyst does if something still does not fit
+
+It never silently truncates. A value too wide for its box is shrunk to fit,
+down to 6pt, and the affected fields are listed after the run. Below 6pt the
+text would be there but unreadable, so that row fails and is reported instead.
+
+### A note on fonts
+
+A prepared field draws its value in the same font the placeholder was in, so
+the value matches the text around it. Where the PDF's font is *subset* — cut
+down to only the characters the document already used, which is what Word
+does — Doclyst checks it can still spell an arbitrary name. If it cannot, that
+field falls back to Helvetica and you are told which ones, because the
+difference is visible.
+
+---
+
+## Getting PDFs instead of Word files
+
+Set **Output format** to *PDF* in the browser, or pass `--output pdf` on the
+command line. A PDF template always produces PDF, so the setting only applies
+to Word templates.
+
+**What you get.** The wording is exactly the wording in your template, with
+bold, italic, font sizes and paragraph alignment preserved. The layout is
+re-created rather than copied, so the result will not look identical to the
+Word file — line breaks and spacing may fall differently.
+
+**Why not an exact copy?** Reproducing Word's layout faithfully needs a layout
+engine, and none runs inside a browser tab. The only other way to do it would
+be to upload your documents to a conversion service — which is the one thing
+this tool is built never to do.
+
+**If appearance matters, use a PDF template instead** (see *Keeping your
+letterhead exactly as designed*, above). That route is exact, because Doclyst
+fills your real PDF rather than rebuilding it.
+
+**Two things to check before you run a batch as PDF:**
+
+1. **Tables, images, bullet lists, headers and footers do not come across.**
+   Doclyst tells you as soon as you choose PDF if your template uses any of
+   them. If your letterhead lives in the Word header, it will not appear in the
+   PDF — put it in the body of the document instead, or keep DOCX output.
+2. **Names must use Western European characters.** PDF's built-in fonts do not
+   include Chinese, Tamil, Malay in Jawi script, or other non-Latin writing.
+   A row whose data needs them fails with a clear message instead of producing
+   a document full of blanks — the rest of the batch still completes. **If your
+   staff list includes such names, generate DOCX** and convert with Word or
+   your usual PDF printer.
+
+Generate one document and open it before running the whole batch. This is worth
+doing every time, and doubly so the first time you use a template as PDF.
 
 ---
 
@@ -323,6 +487,7 @@ Useful options:
 |---|---|
 | `--zip out.zip` | Also (or instead) write one ZIP |
 | `--sheet "Sheet2"` | Choose a worksheet by name or number |
+| `--output pdf` | Write PDFs instead of Word files (see above) |
 | `--missing empty` | Blank out missing values instead of failing the row |
 | `--empty-is-missing` | Treat blank cells as missing |
 | `--dry-run` | Report what would happen; write nothing |
@@ -354,6 +519,10 @@ Exit codes: `0` all good, `1` finished with some failed rows, `2` wrong usage.
 | **The workbook has no worksheet named "X"** | Sheet name typo — the message lists the real ones | Use one of the names shown |
 | **The value for "X" is not one of the options** | A PDF dropdown only accepts certain answers | Make the cell match one of the allowed options exactly |
 | **Encrypted or password-protected PDFs are not supported** | The template is locked | Remove the password, then use it as a template |
+| **The value for "X" is too long for that field** | A PDF form field is too small for the data, and a form field hides what does not fit | Widen the field in the template, tick multiline so it wraps, or shorten the value |
+| **The text was shrunk to fit these form fields** | The values fitted, but only at a smaller size | Nothing is missing; widen those fields in the template so the documents read evenly |
+| **This text cannot be written to a PDF with the built-in fonts** | A name or value uses characters outside the Western European set | Generate DOCX for that batch and convert with Word, or correct the cell if it is a stray character |
+| **This template uses tables, images, … which cannot be carried into a re-typeset PDF** | PDF output re-lays the text and cannot reproduce those | Move the content into ordinary paragraphs, or keep DOCX output |
 | **Refusing to overwrite an existing file** | Output already exists | Use a new folder, or add `--force` |
 | **A ZIP this large may fail to save** | The batch is too big for an in-memory download | Use *Save to folder* / *Save as ZIP*, or the command line |
 

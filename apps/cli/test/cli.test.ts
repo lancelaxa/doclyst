@@ -4,11 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unzipSync } from 'fflate';
-import { readDocxText } from '@doclyst/core';
+import { readDocxText, readPdfFields } from '@doclyst/core';
 import { parseArgs, getBoolean, getString } from '../src/args.js';
 import { resolveWithin } from '../src/paths.js';
-import { fillCommand, inspectCommand, type CommandContext } from '../src/commands.js';
-import { makeTemplate } from './helpers/template.js';
+import { fillCommand, inspectCommand, prepareCommand, type CommandContext } from '../src/commands.js';
+import { makeTemplate, makePdfTemplate, makePlaceholderPdf } from './helpers/template.js';
+import { pdfText } from './helpers/pdftext.js';
 
 /** Collects CLI output so assertions can check what an operator would see. */
 function makeContext(): CommandContext & { out: string[]; err: string[] } {
@@ -124,6 +125,136 @@ describe('CLI commands', () => {
     });
   });
 
+  describe('prepare', () => {
+    it('turns placeholders into fields and writes a new file', async () => {
+      const source = join(dir, 'letter.pdf');
+      const target = join(dir, 'letter-template.pdf');
+      await writeFile(source, await makePlaceholderPdf());
+
+      const ctx = makeContext();
+      expect(
+        await prepareCommand(parseArgs(['prepare', '--template', source, '--out', target]), ctx),
+      ).toBe(0);
+
+      const out = ctx.out.join('\n');
+      expect(out).toContain('NAME');
+      expect(out).toContain('SALARY');
+      expect(await readPdfFields(new Uint8Array(await readFile(target)))).toHaveLength(2);
+    });
+
+    it('writes the template owner-only, like everything else', async () => {
+      const source = join(dir, 'letter.pdf');
+      const target = join(dir, 'letter-template.pdf');
+      await writeFile(source, await makePlaceholderPdf());
+      await prepareCommand(parseArgs(['prepare', '--template', source, '--out', target]), makeContext());
+      expect((await stat(target)).mode & 0o777).toBe(0o600);
+    });
+
+    it('refuses to overwrite an existing file', async () => {
+      const source = join(dir, 'letter.pdf');
+      const target = join(dir, 'letter-template.pdf');
+      await writeFile(source, await makePlaceholderPdf());
+      await writeFile(target, 'existing');
+
+      const ctx = makeContext();
+      expect(
+        await prepareCommand(parseArgs(['prepare', '--template', source, '--out', target]), ctx),
+      ).toBe(1);
+      expect(await readFile(target, 'utf8')).toBe('existing');
+    });
+
+    it('tells the user to export to PDF first when given a Word file', async () => {
+      const ctx = makeContext();
+      expect(
+        await prepareCommand(
+          parseArgs(['prepare', '--template', templatePath, '--out', join(dir, 'x.pdf')]),
+          ctx,
+        ),
+      ).toBe(2);
+      expect(ctx.err.join('\n')).toContain('Save your Word document as PDF first');
+    });
+
+    it('rejects a nonsense --widen', async () => {
+      const source = join(dir, 'letter.pdf');
+      await writeFile(source, await makePlaceholderPdf());
+      const ctx = makeContext();
+      expect(
+        await prepareCommand(
+          parseArgs(['prepare', '--template', source, '--out', join(dir, 'x.pdf'), '--widen', 'wide']),
+          ctx,
+        ),
+      ).toBe(2);
+      expect(ctx.err.join('\n')).toContain('--widen must be a positive number');
+    });
+
+    it('produces a template that fills correctly end to end', async () => {
+      const source = join(dir, 'letter.pdf');
+      const target = join(dir, 'letter-template.pdf');
+      await writeFile(source, await makePlaceholderPdf());
+      await prepareCommand(
+        parseArgs(['prepare', '--template', source, '--out', target, '--widen', '2']),
+        makeContext(),
+      );
+
+      const outDir2 = join(dir, 'prepared-out');
+      const ctx = makeContext();
+      expect(
+        await fillCommand(
+          parseArgs(['fill', '--template', target, '--data', dataPath, '--out', outDir2]),
+          ctx,
+        ),
+      ).toBe(0);
+      expect(pdfText(new Uint8Array(await readFile(join(outDir2, 'document-0001.pdf'))))).toBeDefined();
+    });
+  });
+
+  describe('checking a PDF template against the data', () => {
+    const PDF_CSV = 'NAME,ADDRESS\nAisha Rahman,45 Bukit Timah Road #12-07\nWei Lun Tan,Blk 512 Ang Mo Kio Avenue 8 #14-233 Singapore 560512\n';
+
+    it('confirms when every field is big enough', async () => {
+      const pdfPath = join(dir, 'letter.pdf');
+      await writeFile(pdfPath, await makePdfTemplate([
+        { name: 'NAME', width: 300 },
+        { name: 'ADDRESS', width: 400 },
+      ]));
+      await writeFile(dataPath, PDF_CSV);
+
+      const ctx = makeContext();
+      expect(
+        await inspectCommand(parseArgs(['inspect', '--template', pdfPath, '--data', dataPath]), ctx),
+      ).toBe(0);
+      expect(ctx.out.join('\n')).toContain('big enough for the widest value');
+    });
+
+    it('fails inspect when a field cannot fit the data, naming the row', async () => {
+      const pdfPath = join(dir, 'letter.pdf');
+      await writeFile(pdfPath, await makePdfTemplate([
+        { name: 'NAME', width: 300 },
+        { name: 'ADDRESS', width: 80 },
+      ]));
+      await writeFile(dataPath, PDF_CSV);
+
+      const ctx = makeContext();
+      expect(
+        await inspectCommand(parseArgs(['inspect', '--template', pdfPath, '--data', dataPath]), ctx),
+      ).toBe(1);
+      const err = ctx.err.join('\n');
+      expect(err).toContain('ADDRESS');
+      expect(err).toContain('row 2');
+      // The report names rows, never the values behind them.
+      expect(err).not.toContain('Ang Mo Kio');
+    });
+
+    it('says nothing about field sizes for a DOCX template', async () => {
+      const ctx = makeContext();
+      await inspectCommand(
+        parseArgs(['inspect', '--template', templatePath, '--data', dataPath]),
+        ctx,
+      );
+      expect(`${ctx.out.join('\n')}${ctx.err.join('\n')}`).not.toContain('big enough');
+    });
+  });
+
   describe('fill', () => {
     const fillArgs = (...extra: string[]) =>
       parseArgs(['fill', '--template', templatePath, '--data', dataPath, '--out', outDir, ...extra]);
@@ -157,6 +288,48 @@ describe('CLI commands', () => {
       expect(manifest).toContain('document-0001.docx');
       expect(manifest).not.toContain('Aisha Rahman');
       expect(manifest).not.toContain('4500');
+    });
+
+    describe('--output', () => {
+      it('writes PDFs, named .pdf, when asked for PDF', async () => {
+        const ctx = makeContext();
+        expect(await fillCommand(fillArgs('--output', 'pdf'), ctx)).toBe(0);
+
+        const first = new Uint8Array(await readFile(join(outDir, 'document-0001.pdf')));
+        expect(Buffer.from(first.slice(0, 5)).toString()).toBe('%PDF-');
+        expect(pdfText(first)).toContain('Aisha Rahman');
+      });
+
+      it('still writes DOCX by default', async () => {
+        await fillCommand(fillArgs(), makeContext());
+        await expect(stat(join(outDir, 'document-0001.docx'))).resolves.toBeDefined();
+      });
+
+      it('creates each PDF owner-only, like every other output', async () => {
+        await fillCommand(fillArgs('--output', 'pdf'), makeContext());
+        expect((await stat(join(outDir, 'document-0001.pdf'))).mode & 0o777).toBe(0o600);
+      });
+
+      it('rejects a format it does not have', async () => {
+        const ctx = makeContext();
+        expect(await fillCommand(fillArgs('--output', 'rtf'), ctx)).toBe(2);
+        expect(ctx.err.join('\n')).toContain('--output must be one of');
+      });
+
+      it('warns when PDF output would drop part of the template', async () => {
+        // Silence here would mean discovering the missing table after sending.
+        await writeFile(templatePath, makeTemplate(['NAME', 'SALARY'], { withTable: true }));
+        const ctx = makeContext();
+        expect(await fillCommand(fillArgs('--output', 'pdf'), ctx)).toBe(0);
+        expect(ctx.err.join('\n')).toContain('tables');
+      });
+
+      it('says nothing about unsupported features when writing DOCX', async () => {
+        await writeFile(templatePath, makeTemplate(['NAME', 'SALARY'], { withTable: true }));
+        const ctx = makeContext();
+        await fillCommand(fillArgs(), ctx);
+        expect(ctx.err.join('\n')).not.toContain('tables');
+      });
     });
 
     it('writes a ZIP when asked', async () => {

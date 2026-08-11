@@ -101,6 +101,10 @@ export interface PdfFieldSpec {
   readonly name: string;
   readonly kind?: 'text' | 'checkbox' | 'dropdown';
   readonly options?: readonly string[];
+  /** Widget width in points. Narrow boxes are how overflow is exercised. */
+  readonly width?: number;
+  readonly height?: number;
+  readonly multiline?: boolean;
 }
 
 /** Build a one-page PDF with the named AcroForm fields. */
@@ -115,7 +119,14 @@ export async function buildPdfForm(fields: readonly PdfFieldSpec[]): Promise<Uin
     const kind = spec.kind ?? 'text';
     if (kind === 'text') {
       const field = form.createTextField(spec.name);
-      field.addToPage(page, { x: 40, y, width: 300, height: 20, font });
+      if (spec.multiline) field.enableMultiline();
+      field.addToPage(page, {
+        x: 40,
+        y,
+        width: spec.width ?? 300,
+        height: spec.height ?? 20,
+        font,
+      });
     } else if (kind === 'checkbox') {
       const field = form.createCheckBox(spec.name);
       field.addToPage(page, { x: 40, y, width: 16, height: 16 });

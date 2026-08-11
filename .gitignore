@@ -47,6 +47,15 @@ examples/offer-letter.docx
 *.key
 *.p12
 
+# Throwaway scripts written at the repository root while investigating.
+#
+# Three of these were committed by accident: they import from `dist/` and read
+# from `/tmp`, so they are broken for anyone else and belong to nobody. Every
+# real script in this repository lives in a package or in `examples/`, so
+# nothing at the root is a loss.
+/*.mjs
+!/*.config.mjs
+
 # Editor / OS noise
 .DS_Store
 Thumbs.db

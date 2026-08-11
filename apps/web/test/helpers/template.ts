@@ -1,7 +1,7 @@
 import { zipSync, strToU8 } from 'fflate';
 
 /**
- * A minimal DOCX template for CLI tests.
+ * Minimal templates for the browser tests.
  *
  * Built in code rather than committed as a binary, so the repository holds no
  * opaque document files and the template under test is readable here.
@@ -19,12 +19,16 @@ const RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
 </Relationships>`;
 
-function documentXml(placeholders: readonly string[]): string {
+/** A one-cell table, used to test what PDF output cannot carry over. */
+const TABLE = '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>';
+
+function documentXml(placeholders: readonly string[], withTable: boolean): string {
   const paragraphs = placeholders
     .map((name) => `<w:p><w:r><w:t>Field {{${name}}}.</w:t></w:r></w:p>`)
     .join('');
+  const body = withTable ? paragraphs + TABLE : paragraphs;
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paragraphs}</w:body></w:document>`;
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`;
 }
 
 /** The earliest timestamp the ZIP format can represent; keeps output stable. */
@@ -36,13 +40,60 @@ const FIXED_TIMESTAMP = new Date(Date.UTC(1980, 0, 1));
  * Defaults to NAME and SALARY, matching the CSV used by most CLI tests; the
  * XLSX fixture has different column headers and passes its own.
  */
-export function makeTemplate(placeholders: readonly string[] = ['NAME', 'SALARY']): Uint8Array {
+export function makeTemplate(
+  placeholders: readonly string[] = ['NAME', 'SALARY'],
+  options: { readonly withTable?: boolean } = {},
+): Uint8Array {
   return zipSync(
     {
       '[Content_Types].xml': strToU8(CONTENT_TYPES),
       '_rels/.rels': strToU8(RELS),
-      'word/document.xml': strToU8(documentXml(placeholders)),
+      'word/document.xml': strToU8(documentXml(placeholders, options.withTable ?? false)),
     },
     { mtime: FIXED_TIMESTAMP },
   );
+}
+
+/**
+ * A one-page PDF template with form fields, to test the PDF-only path.
+ *
+ * Widths are settable so a field can be made deliberately too narrow for the
+ * data, which is what the fit check exists to catch.
+ */
+export async function makePdfTemplate(
+  fields: readonly { readonly name: string; readonly width: number }[] = [
+    { name: 'FULL_NAME', width: 300 },
+  ],
+): Promise<Uint8Array> {
+  const { PDFDocument, StandardFonts } = await import('pdf-lib');
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([595, 842]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const form = doc.getForm();
+
+  let y = 700;
+  for (const spec of fields) {
+    form
+      .createTextField(spec.name)
+      .addToPage(page, { x: 40, y, width: spec.width, height: 20, font });
+    y -= 40;
+  }
+  return doc.save();
+}
+
+/**
+ * A PDF with `{{PLACEHOLDERS}}` written into it as ordinary text.
+ *
+ * This is the shape of a letter designed in Word and saved as PDF: the design
+ * is fixed, and the variable parts are still literal text on the page.
+ */
+export async function makePlaceholderPdf(): Promise<Uint8Array> {
+  const { PDFDocument, StandardFonts } = await import('pdf-lib');
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([595.28, 841.89]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+
+  page.drawText('Dear {{FULL_NAME}},', { x: 56, y: 760, size: 11, font });
+  page.drawText('Your title is {{JOB_TITLE}}.', { x: 56, y: 736, size: 11, font });
+  return doc.save();
 }
