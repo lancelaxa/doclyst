@@ -5,6 +5,7 @@ import {
   checkPdfTemplateFit,
   detectTemplateKind,
   normalizeKey,
+  preparePdfTemplate,
   readCsvRecords,
   readSheetNames,
   readTemplateFields,
@@ -98,6 +99,13 @@ const templateSummary = byId<HTMLDivElement>('template-summary');
 const dataSummary = byId<HTMLDivElement>('data-summary');
 const filenameWarnings = byId<HTMLDivElement>('filename-warnings');
 const fitReport = byId<HTMLDivElement>('fit-report');
+const preparePanel = byId<HTMLDivElement>('prepare-panel');
+const prepareButton = byId<HTMLButtonElement>('prepare');
+const downloadPreparedButton = byId<HTMLButtonElement>('download-prepared');
+const prepareResult = byId<HTMLDivElement>('prepare-result');
+
+/** The prepared template, kept so it can be downloaded and reused. */
+let preparedTemplate: { bytes: Uint8Array; filename: string } | undefined;
 
 // --- drag and drop -----------------------------------------------------
 
@@ -193,11 +201,86 @@ templateInput.addEventListener('change', () => {
         ? fieldList('Fields', fields)
         : warning(
             template.kind === 'pdf'
-              ? 'This PDF has no fillable form fields. Add form fields named after your columns.'
+              ? 'This PDF has no fillable form fields yet.'
               : 'No placeholders found. Add {{FIELD}} markers to the template.',
           ),
     );
+
+    // A PDF with no fields is usually one exported straight from Word with the
+    // placeholders still written into it — which Doclyst can turn into a
+    // template itself, rather than sending someone to a PDF editor.
+    preparedTemplate = undefined;
+    clear(prepareResult);
+    downloadPreparedButton.hidden = true;
+    preparePanel.hidden = !(template.kind === 'pdf' && fields.length === 0);
   });
+});
+
+prepareButton.addEventListener('click', () => {
+  void withStatus(prepareResult, async () => {
+    const loaded = loadedTemplate;
+    if (loaded === undefined || loaded.template.kind !== 'pdf') return;
+
+    const result = await preparePdfTemplate(loaded.template.bytes);
+    const template: Template = { kind: 'pdf', bytes: result.bytes };
+    const fields = await readTemplateFields(template);
+
+    // The prepared file becomes the template in use, so a batch can be run
+    // straight away without a round trip through the filesystem.
+    loadedTemplate = { template, filename: loaded.filename, fields };
+    preparedTemplate = {
+      bytes: result.bytes,
+      filename: loaded.filename.replace(/\.pdf$/i, '') + '-template.pdf',
+    };
+    downloadPreparedButton.hidden = false;
+
+    replaceChildren(
+      templateSummary,
+      summaryLine(`${loaded.filename} — PDF, prepared`),
+      fieldList('Fields', fields),
+    );
+
+    const notes: Node[] = [
+      el('p', {
+        className: 'ok',
+        text: `Placed ${result.fields.length} field${result.fields.length === 1 ? '' : 's'}. The rest of the page is unchanged.`,
+      }),
+    ];
+    for (const skip of result.skipped) {
+      notes.push(warning(`"${skip.name}" was not turned into a field because ${skip.reason}.`));
+    }
+    const inline = result.fields.filter((field) => field.inline);
+    if (inline.length > 0) {
+      notes.push(
+        warning(
+          `${inline.length} placeholder(s) have text after them on the same line: ${inline.map((field) => field.name).join(', ')}. A PDF cannot reflow, so a short value leaves a gap before the following words and a long one shrinks to fit. Putting those placeholders on their own line in the source document avoids both.`,
+        ),
+      );
+    }
+
+    const swapped = result.fields.filter((field) => !field.keptFont);
+    if (swapped.length > 0) {
+      notes.push(
+        warning(
+          `${swapped.length} field(s) will draw their value in Helvetica, because the template's own font does not carry every letter a value might need. Check one document before sending a batch.`,
+        ),
+      );
+    }
+    notes.push(
+      el('p', {
+        className: 'fields',
+        text: 'Download the prepared template to reuse it next time without this step.',
+      }),
+    );
+    replaceChildren(prepareResult, ...notes);
+    preparePanel.hidden = false;
+    refresh();
+  });
+});
+
+downloadPreparedButton.addEventListener('click', () => {
+  if (preparedTemplate === undefined) return;
+  downloadBytes(preparedTemplate.bytes, preparedTemplate.filename);
 });
 
 dataInput.addEventListener('change', () => {

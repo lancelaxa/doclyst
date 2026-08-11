@@ -12,6 +12,7 @@ import {
   type PDFFont,
 } from 'pdf-lib';
 import { DoclystError, safeErrorSummary } from '../errors.js';
+import { readFontFromDict, type FontInfo } from './content.js';
 import type { PlaceholderResolver } from '../docx/wordxml.js';
 
 /**
@@ -67,6 +68,15 @@ export interface PdfFillOptions {
    */
   readonly minFontSizePt?: number;
 }
+
+/**
+ * Prefix Doclyst gives fonts it adopts from a page into the form's resources.
+ *
+ * A field carrying one of these is drawn here rather than by pdf-lib, which
+ * would otherwise render every value in its own default font — visibly wrong on
+ * a letter set in anything else.
+ */
+const ADOPTED_FONT_PREFIX = 'Doclyst';
 
 /** How to handle a value that does not fit its form field. */
 export type OverflowPolicy = 'shrink' | 'error' | 'ignore';
@@ -171,7 +181,10 @@ export async function fillPdf(
     if (value === `{{${key}}}`) continue;
 
     applyFieldValue(field, value, key);
-    if (field instanceof PDFTextField) {
+    // A field drawn with an adopted font is measured against that font further
+    // down; measuring it here with pdf-lib's default would judge it by metrics
+    // it will never be drawn in.
+    if (field instanceof PDFTextField && !usesAdoptedFont(field)) {
       const shrunk = fitTextField(field, value, key, defaultFont, overflow, minFontSize);
       if (shrunk !== undefined) shrunkFields.push(shrunk);
     }
@@ -182,9 +195,17 @@ export async function fillPdf(
     scrubPdfMetadata(doc);
   }
 
+  // Fields pointing at a font adopted from the page are drawn here, because
+  // pdf-lib generates appearances with its own font and would silently swap the
+  // typeface on every value.
+  const adopted = drawAdoptedFields(doc, form, resolve, overflow, minFontSize);
+  shrunkFields.push(...adopted.shrunk);
+
   if (flatten) {
     try {
-      form.flatten();
+      // Appearances already generated above must not be regenerated, or the
+      // adopted font would be replaced by pdf-lib's default after all.
+      form.flatten({ updateFieldAppearances: adopted.drawn === 0 });
     } catch (error) {
       throw new DoclystError(
         'RENDER_FAILED',
@@ -198,8 +219,151 @@ export async function fillPdf(
   // Flattening already rasterises each field's appearance stream, so asking
   // for a second pass would be wasted work. When the caller keeps the fields
   // interactive, appearances must be regenerated or viewers show empty boxes.
-  const bytes = await doc.save({ updateFieldAppearances: !flatten });
+  const bytes = await doc.save({ updateFieldAppearances: !flatten && adopted.drawn === 0 });
   return { bytes, replaced, shrunkFields };
+}
+
+/**
+ * Draw the fields whose font was adopted from the page.
+ *
+ * The appearance stream is written by hand so the value appears in the same
+ * typeface as the text around it. Without this the letter reads as two
+ * documents spliced together, which is the whole thing the PDF-template route
+ * exists to avoid.
+ *
+ * Returns how many fields were drawn, so the caller knows whether pdf-lib may
+ * regenerate the rest.
+ */
+function drawAdoptedFields(
+  doc: PDFDocument,
+  form: ReturnType<PDFDocument['getForm']>,
+  resolve: PlaceholderResolver,
+  overflow: OverflowPolicy,
+  minSize: number,
+): { drawn: number; shrunk: string[] } {
+  const resources = form.acroForm.dict.lookup(PDFName.of('DR'));
+  const formFonts =
+    resources instanceof PDFDict ? resources.lookup(PDFName.of('Font')) : undefined;
+  if (!(formFonts instanceof PDFDict)) return { drawn: 0, shrunk: [] };
+
+  let drawn = 0;
+  const shrunk: string[] = [];
+  for (const field of form.getFields()) {
+    if (!(field instanceof PDFTextField)) continue;
+
+    const appearance = field.acroField.getDefaultAppearance() ?? '';
+    const fontName = /\/(\S+)\s+([\d.]+)\s+Tf/.exec(appearance);
+    if (fontName === null || !(fontName[1] ?? '').startsWith(ADOPTED_FONT_PREFIX)) continue;
+
+    const name = fontName[1] as string;
+    const size = Number.parseFloat(fontName[2] as string);
+    const fontDict = formFonts.lookup(PDFName.of(name));
+    if (!(fontDict instanceof PDFDict)) continue;
+
+    const key = fieldNameToKey(field.getName());
+    const value = resolve(key, `{{${key}}}`);
+    if (value === `{{${key}}}`) continue;
+
+    const font = readFontFromDict(fontDict);
+    const result = drawFieldValue(doc, form, field, formFonts, name, font, size, value, key, overflow, minSize);
+    if (result === 'drawn') drawn += 1;
+    else if (result === 'shrunk') {
+      drawn += 1;
+      shrunk.push(key);
+    }
+  }
+  return { drawn, shrunk };
+}
+
+/** Whether a field is set to be drawn with a font adopted from the page. */
+function usesAdoptedFont(field: PDFTextField): boolean {
+  const appearance = field.acroField.getDefaultAppearance() ?? '';
+  const name = /\/(\S+)\s+[\d.]+\s+Tf/.exec(appearance)?.[1];
+  return name !== undefined && name.startsWith(ADOPTED_FONT_PREFIX);
+}
+
+/** Write one field's appearance stream, drawing the value in the given font. */
+function drawFieldValue(
+  doc: PDFDocument,
+  form: ReturnType<PDFDocument['getForm']>,
+  field: PDFTextField,
+  formFonts: PDFDict,
+  fontName: string,
+  font: FontInfo,
+  size: number,
+  value: string,
+  key: string,
+  overflow: OverflowPolicy,
+  minSize: number,
+): 'drawn' | 'shrunk' | 'skipped' {
+  // A font that cannot spell the value is not used for it. Leaving the field to
+  // pdf-lib's default font shows the value in the wrong typeface, which is far
+  // better than showing it with holes where letters should be.
+  const codes = font.encode(value);
+  if (codes === undefined) return 'skipped';
+
+  const widget = field.acroField.getWidgets()[0];
+  if (widget === undefined) return 'skipped';
+
+  const rectangle = widget.getRectangle();
+  const width = font.bytesPerCode === 2 ? 2 : 1;
+  const hex = codes
+    .map((code) => code.toString(16).padStart(width * 2, '0'))
+    .join('');
+
+  // Shrink to the box using this font's own metrics, not pdf-lib's, since this
+  // is the font the value will actually be drawn in.
+  const advance = codes.reduce((sum, code) => sum + font.widthOf(code), 0) / 1000;
+  const available = rectangle.width - 4;
+  const overflows = advance > 0 && advance * size > available;
+
+  if (overflows && overflow === 'error') {
+    throw new DoclystError(
+      'INVALID_DATA',
+      `The value for "${key}" is too long for that field in the PDF template, and a PDF form field hides whatever does not fit. Widen the field, allow more lines, or shorten the value.`,
+      { field: key },
+    );
+  }
+
+  const fitted = overflows ? available / advance : size;
+  if (overflows && overflow !== 'ignore' && fitted < minSize) {
+    throw new DoclystError(
+      'INVALID_DATA',
+      `The value for "${key}" cannot be made to fit that field in the PDF template without shrinking it below ${minSize}pt, which would be unreadable. Widen the field, allow more lines, or shorten the value.`,
+      { field: key },
+    );
+  }
+  const drawSize = overflows && overflow !== 'ignore' ? fitted : size;
+
+  // Sit the text on a baseline that centres the cap height in the box.
+  const baseline = (rectangle.height - drawSize * 0.72) / 2;
+  const stream = [
+    '/Tx BMC',
+    'q',
+    'BT',
+    `/${fontName} ${drawSize.toFixed(2)} Tf`,
+    '0 g',
+    `2 ${baseline.toFixed(2)} Td`,
+    `<${hex}> Tj`,
+    'ET',
+    'Q',
+    'EMC',
+  ].join('\n');
+
+  const appearance = doc.context.flateStream(stream, {
+    Type: 'XObject',
+    Subtype: 'Form',
+    BBox: [0, 0, rectangle.width, rectangle.height],
+    Resources: { Font: { [fontName]: formFonts.get(PDFName.of(fontName)) } },
+  });
+
+  const ref = doc.context.register(appearance);
+  widget.setNormalAppearance(ref);
+  // pdf-lib regenerates the appearance of any field still marked dirty, which
+  // would replace what was just drawn with its own default font.
+  form.markFieldAsClean(field.ref);
+
+  return overflows && overflow !== 'ignore' ? 'shrunk' : 'drawn';
 }
 
 /**

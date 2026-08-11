@@ -7,7 +7,7 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unzipSync } from 'fflate';
 import { readDocxText } from '@doclyst/core';
-import { makeTemplate, makePdfTemplate } from './helpers/template.js';
+import { makeTemplate, makePdfTemplate, makePlaceholderPdf } from './helpers/template.js';
 import { pdfText } from './helpers/pdftext.js';
 import { installFakeFileSystem, removeFileSystemAccess } from './helpers/fake-fs.js';
 
@@ -212,6 +212,72 @@ describe('the built page', () => {
     // One person's data must not appear in another's document.
     expect(text).not.toContain('Wei Lun Tan');
     await page.close();
+  });
+
+  describe('preparing a PDF that still has placeholders in it', () => {
+    async function loadPlaceholderPdf(page: Page): Promise<void> {
+      await page.setInputFiles('#template-input', {
+        name: 'offer.pdf',
+        mimeType: 'application/pdf',
+        buffer: Buffer.from(await makePlaceholderPdf()),
+      });
+    }
+
+    it('offers to prepare a PDF that has no fields yet', async () => {
+      const { page } = await openPage();
+      await loadPlaceholderPdf(page);
+      await expect.poll(() => page.locator('#prepare-panel').isVisible()).toBe(true);
+      await page.close();
+    });
+
+    it('does not offer it for a PDF that already has fields', async () => {
+      const { page } = await openPage();
+      await page.setInputFiles('#template-input', {
+        name: 'form.pdf',
+        mimeType: 'application/pdf',
+        buffer: Buffer.from(await makePdfTemplate([{ name: 'FULL_NAME', width: 300 }])),
+      });
+      await expect.poll(() => page.textContent('#template-summary')).toContain('FULL_NAME');
+      expect(await page.locator('#prepare-panel').isVisible()).toBe(false);
+      await page.close();
+    });
+
+    it('creates the fields and reports what it placed', async () => {
+      const { page } = await openPage();
+      await loadPlaceholderPdf(page);
+      await page.click('#prepare');
+
+      await expect.poll(() => page.textContent('#prepare-result')).toContain('Placed');
+      const summary = await page.textContent('#template-summary');
+      expect(summary).toContain('FULL_NAME');
+      expect(summary).toContain('JOB_TITLE');
+      await page.close();
+    });
+
+    it('generates documents straight from the prepared template', async () => {
+      const { page } = await openPage();
+      await loadPlaceholderPdf(page);
+      await page.click('#prepare');
+      await expect.poll(() => page.textContent('#prepare-result')).toContain('Placed');
+
+      await page.setInputFiles('#data-input', {
+        name: 'staff.csv',
+        mimeType: 'text/csv',
+        buffer: Buffer.from('Full Name,Job Title\nAisha Rahman,Data Analyst\n'),
+      });
+      await page.click('#generate');
+      await expect.poll(() => page.textContent('#results')).toContain('1 document ready');
+      await page.close();
+    });
+
+    it('sends nothing off the page while preparing', async () => {
+      const { page, requests } = await openPage();
+      await loadPlaceholderPdf(page);
+      await page.click('#prepare');
+      await expect.poll(() => page.textContent('#prepare-result')).toContain('Placed');
+      expect(offOriginRequests(requests)).toEqual([]);
+      await page.close();
+    });
   });
 
   describe('checking a PDF template against the data', () => {

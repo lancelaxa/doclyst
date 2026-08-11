@@ -94,6 +94,13 @@ export {
 } from './pdf/fill.js';
 
 export {
+  preparePdfTemplate,
+  type PrepareTemplateOptions,
+  type PrepareTemplateResult,
+  type PreparedField,
+} from './pdf/autofields.js';
+
+export {
   sanitizeFilename,
   buildFilename,
   checkFilenameTemplate,

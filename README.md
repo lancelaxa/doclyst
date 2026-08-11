@@ -99,9 +99,23 @@ Two routes produce PDF, and they trade off differently:
 | Editing the template | Word | Word, then add form fields once |
 
 **For anything a candidate, employee or regulator will see, use a PDF
-template.** Design the letter in Word, delete the variable text, save as PDF,
-and add form fields named after your columns. The design survives because Word
-does the layout and Doclyst never re-creates it.
+template.** Design the letter in Word with `{{PLACEHOLDERS}}` in it, save as
+PDF, and let Doclyst turn it into a fillable template:
+
+```bash
+doclyst prepare --template offer.pdf --out offer-template.pdf --widen 1.5
+```
+
+or press **Prepare this template** in the browser. Every placeholder is found
+where it sits, taken off the page, and replaced by a form field at the same
+position, size and typeface — no PDF editor, and nothing else on the page
+moves by so much as a point. The design survives because Word did the layout
+and Doclyst never re-creates it.
+
+One thing to know when writing the template: a PDF cannot reflow, so a
+placeholder in the middle of a sentence becomes a fixed box — a short value
+leaves a gap and a long one shrinks. Give each placeholder its own line, or put
+it at the end of one. Doclyst reports the ones that are not.
 
 Load the template and the data together and Doclyst measures every field
 against the widest value your data actually contains, before generating

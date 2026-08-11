@@ -227,20 +227,55 @@ for anything a candidate, employee or regulator will see.
 
 ### Making one from your existing Word letter
 
-1. **Open your letter in Word** and delete the placeholder text where the
-   variable values go — the name, the salary, the date. Leave the design alone.
+1. **Open your letter in Word** and write `{{PLACEHOLDERS}}` where the variable
+   values go — `{{FULL_NAME}}`, `{{BASIC_SALARY}}`. Name them after your
+   spreadsheet columns. Leave the design alone.
 2. **File → Save as → PDF.** Word does the layout, so the result looks exactly
    like the Word document. This is the step that preserves the appearance.
-3. **Add form fields** where the values belong, and **name each field after
-   your spreadsheet column** — `FULL_NAME`, `BASIC_SALARY`. Either `NAME` or
-   `{{NAME}}` works as a field name. Any PDF editor will do this: Acrobat
-   (Prepare a Form), LibreOffice Draw (free), or Xournal++.
-4. **Make the boxes generous.** A form field hides anything that does not fit,
-   so size each one for your *longest* value, not a typical one. For addresses,
-   turn on multiline so long ones wrap.
-5. **Check it** — see below. Do this before you use it on real people.
+3. **Drop the PDF into Doclyst and press “Prepare this template”.** It finds
+   every placeholder, takes the text off the page, and puts a fillable field in
+   its place — same position, same size, same typeface. Download the prepared
+   template and reuse it for every batch after that.
+4. **Check it** against your data — see below.
 
-You only do this once. The template is then reusable for every batch.
+No PDF editor needed. On the command line the same step is:
+
+```bash
+node apps/cli/dist/bin.js prepare \
+  --template offer-letter.pdf \
+  --out offer-letter-template.pdf \
+  --widen 1.5
+```
+
+`--widen` makes each field wider than the placeholder it replaces, since a real
+value is usually longer than `{{FULL_NAME}}`. Fields are never widened over the
+text that follows them on a line.
+
+### Where to put the placeholders
+
+**Give a placeholder its own line, or put it at the end of one.** This matters
+more than it sounds. A PDF cannot reflow: a field is a fixed box, so the words
+after it on the same line do not move. If a placeholder sits mid-sentence:
+
+- a **short** value leaves a visible gap before the following words;
+- a **long** value has to shrink to fit rather than pushing them along.
+
+Doclyst tells you which placeholders have text after them on the same line, so
+you can move them in the Word document and prepare it again. Laid out as a form
+— label on the left, value on the right — every field is free of the problem:
+
+```
+Name:            {{FULL_NAME}}
+Position:        {{JOB_TITLE}}
+Monthly salary:  {{BASIC_SALARY}}
+```
+
+### If you would rather place the fields yourself
+
+Any PDF editor will do it — Acrobat (Prepare a Form), LibreOffice Draw (free),
+or Xournal++. Name each field after your spreadsheet column; either `NAME` or
+`{{NAME}}` works. Make the boxes generous, and turn on multiline for addresses
+so long ones wrap. Doclyst fills a hand-made template exactly the same way.
 
 ### Checking the template before you use it
 
@@ -266,6 +301,15 @@ paste into a ticket.
 It never silently truncates. A value too wide for its box is shrunk to fit,
 down to 6pt, and the affected fields are listed after the run. Below 6pt the
 text would be there but unreadable, so that row fails and is reported instead.
+
+### A note on fonts
+
+A prepared field draws its value in the same font the placeholder was in, so
+the value matches the text around it. Where the PDF's font is *subset* — cut
+down to only the characters the document already used, which is what Word
+does — Doclyst checks it can still spell an arbitrary name. If it cannot, that
+field falls back to Helvetica and you are told which ones, because the
+difference is visible.
 
 ---
 

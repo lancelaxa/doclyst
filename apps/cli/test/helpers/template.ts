@@ -73,3 +73,14 @@ export async function makePdfTemplate(
   }
   return doc.save();
 }
+
+/** A PDF with `{{PLACEHOLDERS}}` written into it as ordinary text. */
+export async function makePlaceholderPdf(): Promise<Uint8Array> {
+  const { PDFDocument, StandardFonts } = await import('pdf-lib');
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([595.28, 841.89]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  page.drawText('Dear {{NAME}},', { x: 56, y: 760, size: 11, font });
+  page.drawText('Your salary is {{SALARY}}.', { x: 56, y: 736, size: 11, font });
+  return doc.save();
+}

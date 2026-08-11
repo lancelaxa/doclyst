@@ -623,3 +623,25 @@ footer p {
     transition: none !important;
   }
 }
+
+/*
+ * Offer to prepare a PDF that still has placeholders written into it.
+ *
+ * Sits under the template summary rather than in Options, because it changes
+ * the template itself rather than how a batch is run.
+ */
+.prepare {
+  margin-top: 0.85rem;
+  padding: 0.9rem 1rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.prepare .hint {
+  margin: 0 0 0.7rem;
+}
+
+.prepare .actions {
+  margin: 0;
+}

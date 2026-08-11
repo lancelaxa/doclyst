@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unzipSync } from 'fflate';
-import { readDocxText } from '@doclyst/core';
+import { readDocxText, readPdfFields } from '@doclyst/core';
 import { parseArgs, getBoolean, getString } from '../src/args.js';
 import { resolveWithin } from '../src/paths.js';
-import { fillCommand, inspectCommand, type CommandContext } from '../src/commands.js';
-import { makeTemplate, makePdfTemplate } from './helpers/template.js';
+import { fillCommand, inspectCommand, prepareCommand, type CommandContext } from '../src/commands.js';
+import { makeTemplate, makePdfTemplate, makePlaceholderPdf } from './helpers/template.js';
 import { pdfText } from './helpers/pdftext.js';
 
 /** Collects CLI output so assertions can check what an operator would see. */
@@ -122,6 +122,89 @@ describe('CLI commands', () => {
 
     it('requires something to inspect', async () => {
       expect(await inspectCommand(parseArgs(['inspect']), makeContext())).toBe(2);
+    });
+  });
+
+  describe('prepare', () => {
+    it('turns placeholders into fields and writes a new file', async () => {
+      const source = join(dir, 'letter.pdf');
+      const target = join(dir, 'letter-template.pdf');
+      await writeFile(source, await makePlaceholderPdf());
+
+      const ctx = makeContext();
+      expect(
+        await prepareCommand(parseArgs(['prepare', '--template', source, '--out', target]), ctx),
+      ).toBe(0);
+
+      const out = ctx.out.join('\n');
+      expect(out).toContain('NAME');
+      expect(out).toContain('SALARY');
+      expect(await readPdfFields(new Uint8Array(await readFile(target)))).toHaveLength(2);
+    });
+
+    it('writes the template owner-only, like everything else', async () => {
+      const source = join(dir, 'letter.pdf');
+      const target = join(dir, 'letter-template.pdf');
+      await writeFile(source, await makePlaceholderPdf());
+      await prepareCommand(parseArgs(['prepare', '--template', source, '--out', target]), makeContext());
+      expect((await stat(target)).mode & 0o777).toBe(0o600);
+    });
+
+    it('refuses to overwrite an existing file', async () => {
+      const source = join(dir, 'letter.pdf');
+      const target = join(dir, 'letter-template.pdf');
+      await writeFile(source, await makePlaceholderPdf());
+      await writeFile(target, 'existing');
+
+      const ctx = makeContext();
+      expect(
+        await prepareCommand(parseArgs(['prepare', '--template', source, '--out', target]), ctx),
+      ).toBe(1);
+      expect(await readFile(target, 'utf8')).toBe('existing');
+    });
+
+    it('tells the user to export to PDF first when given a Word file', async () => {
+      const ctx = makeContext();
+      expect(
+        await prepareCommand(
+          parseArgs(['prepare', '--template', templatePath, '--out', join(dir, 'x.pdf')]),
+          ctx,
+        ),
+      ).toBe(2);
+      expect(ctx.err.join('\n')).toContain('Save your Word document as PDF first');
+    });
+
+    it('rejects a nonsense --widen', async () => {
+      const source = join(dir, 'letter.pdf');
+      await writeFile(source, await makePlaceholderPdf());
+      const ctx = makeContext();
+      expect(
+        await prepareCommand(
+          parseArgs(['prepare', '--template', source, '--out', join(dir, 'x.pdf'), '--widen', 'wide']),
+          ctx,
+        ),
+      ).toBe(2);
+      expect(ctx.err.join('\n')).toContain('--widen must be a positive number');
+    });
+
+    it('produces a template that fills correctly end to end', async () => {
+      const source = join(dir, 'letter.pdf');
+      const target = join(dir, 'letter-template.pdf');
+      await writeFile(source, await makePlaceholderPdf());
+      await prepareCommand(
+        parseArgs(['prepare', '--template', source, '--out', target, '--widen', '2']),
+        makeContext(),
+      );
+
+      const outDir2 = join(dir, 'prepared-out');
+      const ctx = makeContext();
+      expect(
+        await fillCommand(
+          parseArgs(['fill', '--template', target, '--data', dataPath, '--out', outDir2]),
+          ctx,
+        ),
+      ).toBe(0);
+      expect(pdfText(new Uint8Array(await readFile(join(outDir2, 'document-0001.pdf'))))).toBeDefined();
     });
   });
 

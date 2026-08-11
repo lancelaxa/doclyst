@@ -8,6 +8,7 @@ import {
   escapeCsvValue,
   readCsvRecords,
   readSheetNames,
+  preparePdfTemplate,
   readTemplateFields,
   readXlsxRecords,
   runBatch,
@@ -119,6 +120,88 @@ export async function inspectCommand(args: ParsedArgs, ctx: CommandContext): Pro
     }
   }
 
+  return 0;
+}
+
+/**
+ * `doclyst prepare` — turn a PDF containing {{PLACEHOLDERS}} into a template.
+ *
+ * The design is what makes this route worth taking, so the output is written to
+ * a new file rather than over the input: the original stays available to
+ * re-prepare after an edit.
+ */
+export async function prepareCommand(args: ParsedArgs, ctx: CommandContext): Promise<number> {
+  const templatePath = getString(args, 'template');
+  const outPath = getString(args, 'out');
+
+  if (!templatePath || !outPath) {
+    ctx.error('Both --template <file.pdf> and --out <file.pdf> are required.');
+    return 2;
+  }
+
+  const widen = getString(args, 'widen');
+  const widthFactor = widen === undefined ? 1 : Number.parseFloat(widen);
+  if (!Number.isFinite(widthFactor) || widthFactor <= 0) {
+    ctx.error('--widen must be a positive number, e.g. 1.5.');
+    return 2;
+  }
+
+  const template = await loadTemplate(templatePath);
+  if (template.kind !== 'pdf') {
+    ctx.error('prepare works on a PDF. Save your Word document as PDF first, then prepare that.');
+    return 2;
+  }
+
+  const result = await preparePdfTemplate(template.bytes, { widthFactor });
+
+  ctx.log(`Prepared ${result.fields.length} field(s) from ${basename(templatePath)}:`);
+  for (const field of result.fields) {
+    const font = field.keptFont ? '' : ' (falls back to Helvetica)';
+    ctx.log(
+      `  ${field.name} — page ${field.page}, ${field.width.toFixed(0)}x${field.height.toFixed(0)}pt at ${field.fontSizePt.toFixed(1)}pt${font}`,
+    );
+  }
+
+  for (const skip of result.skipped) {
+    ctx.error(`Warning: "${skip.name}" was not turned into a field because ${skip.reason}.`);
+  }
+
+  // A fixed box in the middle of a sentence cannot push the words after it
+  // along, so a short value leaves a gap and a long one shrinks. Placeholders
+  // on their own line have neither problem, and the author can move them.
+  const inline = result.fields.filter((field) => field.inline);
+  if (inline.length > 0) {
+    ctx.error('');
+    ctx.error(
+      `Note: ${inline.length} placeholder(s) have text after them on the same line: ${inline.map((field) => field.name).join(', ')}.`,
+    );
+    ctx.error(
+      'A PDF cannot reflow, so a short value will leave a gap before the following words and a long one will shrink to fit. Putting those placeholders on their own line in the source document avoids both.',
+    );
+  }
+
+  // A field that cannot use the surrounding font will look different from the
+  // text around it, which is the one thing this route exists to avoid.
+  const swapped = result.fields.filter((field) => !field.keptFont);
+  if (swapped.length > 0) {
+    ctx.error(
+      `Warning: ${swapped.length} field(s) will draw their value in Helvetica, because the template's own font does not carry every letter a value might need. Check one document before sending a batch.`,
+    );
+  }
+
+  try {
+    await writeNewFile(outPath, result.bytes, getBoolean(args, 'force'));
+  } catch (error) {
+    if (isAlreadyExists(error)) {
+      ctx.error(`Refusing to overwrite an existing file: ${outPath}. Use --force to replace it.`);
+      return 1;
+    }
+    throw error;
+  }
+
+  ctx.log('');
+  ctx.log(`Wrote ${outPath}. Check it against your data with:`);
+  ctx.log(`  doclyst inspect --template ${outPath} --data <your-data.csv>`);
   return 0;
 }
 
