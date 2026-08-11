@@ -1,0 +1,74 @@
+# Build the browser app and publish it two ways, so it can be used without a
+# terminal: as a hosted page on GitHub Pages, and as a single self-contained
+# HTML file downloadable from the run's artifacts.
+#
+# Only the static app is published. No data, template or spreadsheet is
+# involved: the page does all its work in the visitor's browser, and its
+# Content-Security-Policy blocks it from making network requests at all.
+name: Build and publish the app
+
+on:
+  push:
+    branches: ['main', 'claude/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      # The browser tests drive the real page, including the single-file build
+      # opened from disk, so the browser has to be present.
+      - name: Install Chromium for the browser tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Test
+        run: npx vitest run
+
+      # Downloadable from the run page in a browser — no terminal needed.
+      - name: Upload the single-file app
+        uses: actions/upload-artifact@v4
+        with:
+          name: doclyst-single-file
+          path: apps/web/dist/doclyst.html
+          if-no-files-found: error
+
+      - name: Package the site for Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+  # Publishing is a separate job so a failed test never reaches the live page.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

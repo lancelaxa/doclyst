@@ -24,8 +24,13 @@ what to do when something goes wrong. This README is the technical overview.
 
 ## Two ways to use it
 
-**In your browser** — a local page; nothing is uploaded. Drag a template and a
-spreadsheet in, choose how files should be named, and generate.
+**In your browser, with nothing installed** — download `doclyst.html` from the
+latest [Actions](../../actions) run (artifact `doclyst-single-file`) and
+double-click it, or open the GitHub Pages URL if it is enabled. One file, no
+server, works offline. See [GUIDE.md](./GUIDE.md#opening-doclyst-no-terminal-needed).
+
+**In your browser, from source** — a local page; nothing is uploaded. Drag a
+template and a spreadsheet in, choose how files should be named, and generate.
 
 ```bash
 npm install && npm run build
@@ -190,6 +195,28 @@ Summarised here, detailed in [PRIVACY.md](./PRIVACY.md).
 - **Hostile input rejected.** Templates are identified by content rather than
   file extension, zip-bomb expansion is capped, and archive entries with
   traversal paths are refused.
+
+## Distributing the app
+
+`npm run build` produces two things in `apps/web/dist`:
+
+- `index.html` plus assets — a normal static site, deployable anywhere.
+- **`doclyst.html`** — the entire app inlined into one ~480 KB file that runs
+  by double-clicking it, with no server and no network.
+
+The single file exists because a page opened from `file://` cannot load an
+external ES module across that origin, and because it is the only form that
+someone without a terminal can actually use. Inlining means the script and
+style are no longer `'self'`, so rather than loosening the policy to
+`'unsafe-inline'` the build pins the exact SHA-256 of each block — strictly
+narrower than before, and `connect-src 'none'` is untouched. A test opens the
+built file from `file://` and runs a whole batch through it, because a CSP hash
+mismatch surfaces nowhere else.
+
+`.github/workflows/pages.yml` builds, typechecks and tests on every push, then
+publishes the site to GitHub Pages and attaches `doclyst.html` as a downloadable
+artifact. Pages needs enabling once, in Settings → Pages → Source: GitHub
+Actions.
 
 ## The browser interface
 

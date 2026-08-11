@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page, type Request } from 'playwright';
 import { createServer, type Server } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unzipSync } from 'fflate';
@@ -322,6 +322,67 @@ describe('the built page', () => {
       await page.close();
     });
   });
+
+describe('the single-file build', () => {
+  // Opened straight from disk, with no server involved at all. This is how
+  // someone without a terminal is expected to use Doclyst, so it is verified
+  // rather than assumed — and `file://` breaks things a served page does not:
+  // an external ES module will not load across that origin, and the inlined
+  // script has to satisfy its own CSP hash.
+  const singleFile = join(DIST, 'doclyst.html');
+
+  it('exists after a build', () => {
+    expect(existsSync(singleFile)).toBe(true);
+  });
+
+  it('references no external asset', () => {
+    const html = readFileSync(singleFile, 'utf8');
+    expect(html).not.toMatch(/<script[^>]+src=/);
+    expect(html).not.toMatch(/rel="stylesheet"/);
+    expect(html).toContain("connect-src 'none'");
+  });
+
+  it('loads from file:// and runs a batch end to end', async () => {
+    const page = await browser.newPage();
+    const errors: string[] = [];
+    const offOrigin: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    page.on('console', (m) => {
+      if (m.type() === 'error') errors.push(m.text());
+    });
+    page.on('request', (r) => {
+      if (!r.url().startsWith('file://')) offOrigin.push(r.url());
+    });
+
+    await page.goto(`file://${singleFile}`);
+    // A CSP hash mismatch shows up here and nowhere else, so this assertion
+    // is what catches a corrupted inline bundle.
+    expect(errors).toEqual([]);
+
+    await loadInputs(page);
+    await page.click('#generate');
+    await expect.poll(() => page.textContent('#results')).toContain('3 documents ready');
+
+    const download = page.waitForEvent('download');
+    await page.locator('.file-list button').first().click();
+    const stream = await (await download).createReadStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(chunk as Buffer);
+    expect(readDocxText(new Uint8Array(Buffer.concat(chunks)))).toContain('Aisha Rahman');
+
+    expect(offOrigin).toEqual([]);
+    await page.close();
+  });
+
+  it('still offers disk streaming from file://', async () => {
+    // file:// is a secure context in Chromium, so the pickers are available.
+    const page = await browser.newPage();
+    await page.addInitScript(installFakeFileSystem);
+    await page.goto(`file://${singleFile}`);
+    expect(await page.locator('#save-folder').isVisible()).toBe(true);
+    await page.close();
+  });
+});
 
 describe('choosing files', () => {
     it('marks a drop zone as loaded and names the file', async () => {

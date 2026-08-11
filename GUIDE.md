@@ -3,6 +3,7 @@
 A practical walkthrough: prepare a template, prepare a spreadsheet, generate
 one document per person. No programming needed for the browser version.
 
+- [Opening Doclyst (no terminal needed)](#opening-doclyst-no-terminal-needed)
 - [Try it in two minutes](#try-it-in-two-minutes)
 - [Step 1 — Prepare your template](#step-1--prepare-your-template)
 - [Step 2 — Prepare your spreadsheet](#step-2--prepare-your-spreadsheet)
@@ -13,6 +14,59 @@ one document per person. No programming needed for the browser version.
 - [Using the command line](#using-the-command-line)
 - [When something goes wrong](#when-something-goes-wrong)
 - [Handling personal data responsibly](#handling-personal-data-responsibly)
+
+---
+
+## Opening Doclyst (no terminal needed)
+
+You do **not** need to install anything or use a command line. Pick whichever
+of these suits you.
+
+### Option A — download one file and double-click it
+
+This is the simplest, and the most private: there is no server involved at any
+point, and it works with no internet connection at all.
+
+1. Go to the repository on GitHub and open the **Actions** tab.
+2. Click the most recent **“Build and publish the app”** run.
+3. Scroll to **Artifacts** and download **`doclyst-single-file`**.
+4. Unzip it. You get one file: **`doclyst.html`**.
+5. **Double-click it.** It opens in your browser and is ready to use.
+
+That single file *is* the whole application — about 480 KB, with everything
+built in. Keep it on your desktop, email it to a colleague, or put it on a USB
+stick. It never needs updating to keep working, and it works offline.
+
+> Use **Chrome or Edge** if you can. They support saving straight to a folder,
+> which matters for large batches. It still works in Firefox and Safari; you
+> just download the files instead.
+
+### Option B — a link you can bookmark
+
+If the repository owner has switched on GitHub Pages (Settings → Pages →
+Source: **GitHub Actions**), the app is also published at:
+
+```
+https://<owner>.github.io/<repository>/
+```
+
+For this repository that is `https://lancelaxa.github.io/doclyst/`.
+
+Bookmark it and share it with colleagues. **Hosting the page does not mean
+hosting your data**: the page is downloaded to your browser and does all its
+work there. Its Content-Security-Policy blocks it from making network requests
+at all, so it could not send your spreadsheet anywhere even if it tried. Once
+loaded, you can disconnect from the internet and it keeps working.
+
+### Option C — build it yourself
+
+Only if you want to change the code. See [Try it in two
+minutes](#try-it-in-two-minutes) below.
+
+### Which files can I open it with?
+
+However you open it, Doclyst runs entirely in your browser. Nothing is
+uploaded, no account is needed, and closing the tab discards everything.
 
 ---
 
