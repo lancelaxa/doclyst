@@ -69,14 +69,19 @@ Placeholders work in the body, headers, footers and footnotes. Word routinely
 splits a placeholder across several internal text runs; Doclyst stitches them
 back together, so `{{NAME}}` is found whether or not Word broke it up.
 
-**PDF** — add AcroForm form fields and name them after your columns, either
-`NAME` or `{{NAME}}`. Text fields, checkboxes, dropdowns, option lists and
-radio groups are all supported.
+**PDF** — write the same `{{PLACEHOLDERS}}` into the document, save it as PDF,
+and let `doclyst prepare` turn each one into a form field where it already
+sits. Fields named `NAME` or `{{NAME}}` both work, so a template built by hand
+in a PDF editor is filled the same way. Text fields, checkboxes, dropdowns,
+option lists and radio groups are all supported.
 
-PDFs whose placeholder text is *drawn on the page* rather than held in a form
-field cannot be filled. PDF stores positioned glyphs, not editable text, so
-substituting a longer value would require re-flowing the page — a half-correct
-payslip is worse than a clear error, so Doclyst reports one.
+A **scanned** PDF cannot be used: there is no text in it to find, only a picture
+of text.
+
+Placeholder text left drawn on the page is never substituted in place. PDF
+stores positioned glyphs, not editable text, so swapping in a longer value
+would overrun whatever follows it — which is why preparing replaces the
+placeholder with a field that has a known box, rather than editing the page.
 
 **A form field clips whatever does not fit its box**, which is the format's own
 behaviour and produces a document containing a whole address while showing a
@@ -232,11 +237,19 @@ exit code is `1`. Use `--stop-on-error` for all-or-nothing.
 
 ```
 doclyst inspect --template <file> [--data <file>]
+doclyst prepare --template <file.pdf> --out <file.pdf> [--widen <factor>]
 doclyst fill --template <file> --data <file> (--out <dir> | --zip <file>) [options]
 ```
 
+`inspect` reports a template's fields, a data file's columns, any placeholder
+no column can fill, and — for a PDF template — any field too small for the
+widest value in the data. `prepare` turns a PDF's `{{PLACEHOLDERS}}` into form
+fields. `fill` renders one document per row.
+
 | Option | Meaning |
 |---|---|
+| `--output <format>` | `docx` (default) or `pdf`, for a DOCX template |
+| `--widen <factor>` | `prepare` only: field width as a multiple of the placeholder's |
 | `--sheet <name\|index>` | Worksheet to read from an `.xlsx`; defaults to the first |
 | `--filename <pattern>` | Output name pattern; `{{ROW}}` is always available |
 | `--missing <policy>` | `error` (default), `empty`, `keep` |
@@ -247,7 +260,8 @@ doclyst fill --template <file> --data <file> (--out <dir> | --zip <file>) [optio
 | `--no-flatten` | Keep PDF form fields editable |
 | `--keep-metadata` | Keep template author/company metadata in the output |
 
-Exit codes: `0` success, `1` completed with failures, `2` bad usage.
+Exit codes: `0` success, `1` completed with failures — or, for `inspect`, a
+template field too small for the data — `2` bad usage.
 
 ## Privacy and security controls
 
@@ -422,7 +436,13 @@ The CLI has no ceiling either; it writes straight to disk by design.
 Known and deliberate, rather than hidden:
 
 - XLSX is read, not written, and macro-enabled `.xlsm` is not supported.
-- PDF templates require AcroForm fields (see above).
+- A PDF template needs form fields; `doclyst prepare` adds them from
+  `{{PLACEHOLDERS}}`, but a scanned PDF has no text to find.
+- A PDF cannot reflow, so a placeholder mid-sentence becomes a fixed box: a
+  short value leaves a gap, a long one shrinks. Reported per field.
+- PDF output from a DOCX template is re-typeset, so tables, images, numbering
+  and headers are not carried over, and only WinAnsi characters can be drawn.
+  Both are reported before a batch runs.
 - Encrypted or password-protected PDFs are rejected rather than silently saved
   without their protection.
 

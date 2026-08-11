@@ -3,7 +3,7 @@ import { PDFDocument, PDFDict, PDFName, StandardFonts } from 'pdf-lib';
 import { unzlibSync } from 'fflate';
 import { DoclystError } from '../src/errors.js';
 import { preparePdfTemplate } from '../src/pdf/autofields.js';
-import { fillPdf, readPdfFields } from '../src/pdf/fill.js';
+import { checkPdfTemplateFit, fillPdf, readPdfFields } from '../src/pdf/fill.js';
 import { readGlyphs, readPageContent, readPageFonts } from '../src/pdf/content.js';
 
 /**
@@ -343,5 +343,47 @@ describe('a prepared template, once filled', () => {
     const doc = await PDFDocument.load(prepared.bytes, { updateMetadata: false });
     const appearance = doc.getForm().getFields()[0]!.acroField.getDefaultAppearance() ?? '';
     expect(appearance).toMatch(/\/Doclyst\S+\s+[\d.]+\s+Tf/);
+  });
+});
+
+/**
+ * The pre-flight check has to predict the run.
+ *
+ * A prepared template draws its values in a font lifted from the page. Checking
+ * it against pdf-lib's default font instead answered a different question:
+ * `inspect` called three fields tight where filling shrank one. A check that
+ * disagrees with the thing it is checking is worse than no check.
+ */
+describe('checking a prepared template against the data', () => {
+  it('predicts exactly the fields that filling shrinks', async () => {
+    const prepared = await preparePdfTemplate(
+      await letter(['Name: {{FULL_NAME}}', 'Title: {{JOB_TITLE}}']),
+    );
+    // Long enough to need shrinking, short enough to still fit legibly.
+    const records = [{ FULL_NAME: 'Aisha', JOB_TITLE: 'Senior Data Analyst' }];
+
+    const predicted = (await checkPdfTemplateFit(prepared.bytes, records))
+      .filter((report) => report.outcome !== 'fits')
+      .map((report) => report.field)
+      .sort();
+
+    const filled = await fillPdf(
+      prepared.bytes,
+      (key) => (records[0] as Record<string, string>)[key] ?? '',
+      {},
+    );
+
+    // Not a vacuous agreement: something did have to shrink.
+    expect(filled.shrunkFields.length).toBeGreaterThan(0);
+    expect(predicted).toEqual([...filled.shrunkFields].sort());
+  });
+
+  it('measures against the font the template will actually draw with', async () => {
+    // Same box, same value, judged by the font that will draw it.
+    const prepared = await preparePdfTemplate(await letter(['Name: {{FULL_NAME}}']));
+    const reports = await checkPdfTemplateFit(prepared.bytes, [
+      { FULL_NAME: 'Aisha' },
+    ]);
+    expect(reports[0]).toMatchObject({ field: 'FULL_NAME', outcome: 'fits' });
   });
 });

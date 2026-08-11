@@ -390,7 +390,17 @@ async function writeNewFile(
   force: boolean,
 ): Promise<void> {
   if (force) await rm(path, { force: true });
-  await writeFile(path, data, { mode: FILE_MODE, flag: 'wx' });
+
+  try {
+    await writeFile(path, data, { mode: FILE_MODE, flag: 'wx' });
+  } catch (error) {
+    // A failure after the exclusive create leaves a truncated file behind, and
+    // the next attempt then refuses to overwrite it — a message that reads as
+    // though there were something there worth keeping. Nothing this created is
+    // worth keeping, so it goes.
+    if (!isAlreadyExists(error)) await rm(path, { force: true });
+    throw error;
+  }
 }
 
 function isAlreadyExists(error: unknown): boolean {
