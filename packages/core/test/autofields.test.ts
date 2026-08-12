@@ -250,13 +250,26 @@ describe('preparePdfTemplate', () => {
     }
   });
 
+  it('gives a field more room than its placeholder by default', async () => {
+    // The browser has no width control, so the default is the only width most
+    // people ever get. At 1 — the old default — a template whose placeholders
+    // are shorter than the values simply does not fit, and the person
+    // preparing it has no way to say so.
+    const template = await letter(['Name: {{FULL_NAME}}']);
+    const prepared = await preparePdfTemplate(template);
+    const placeholderWidth = (await preparePdfTemplate(template, { widthFactor: 1 }))
+      .fields[0]!.width;
+
+    expect(prepared.fields[0]!.width).toBeGreaterThan(placeholderWidth * 2);
+  });
+
   it('can widen the fields, for values longer than the placeholder', async () => {
     // Widening is asked for by a factor and granted up to the room available,
-    // so the check is that it grows — not that it grows by exactly the factor.
+    // so the check is against an explicit factor, not against the default.
     const line = ['Name: {{CANDIDATE_NAME}}'];
-    const plain = await preparePdfTemplate(await letter(line));
+    const exact = await preparePdfTemplate(await letter(line), { widthFactor: 1 });
     const wide = await preparePdfTemplate(await letter(line), { widthFactor: 2 });
-    expect(wide.fields[0]!.width).toBeCloseTo(plain.fields[0]!.width * 2, 1);
+    expect(wide.fields[0]!.width).toBeCloseTo(exact.fields[0]!.width * 2, 1);
   });
 
   it('never widens a field over the text that follows it', async () => {
@@ -287,13 +300,14 @@ describe('preparePdfTemplate', () => {
   });
 
   it('lets a placeholder at the end of a line use the rest of the width', async () => {
-    const result = await preparePdfTemplate(
-      await letter(['Name: {{FULL_NAME}}']),
-      { widthFactor: 3 },
-    );
+    const result = await preparePdfTemplate(await letter(['Name: {{FULL_NAME}}']), {
+      widthFactor: 3,
+    });
     // Nothing follows, so widening is free.
-    const plain = await preparePdfTemplate(await letter(['Name: {{FULL_NAME}}']));
-    expect(result.fields[0]!.width).toBeGreaterThan(plain.fields[0]!.width * 2);
+    const exact = await preparePdfTemplate(await letter(['Name: {{FULL_NAME}}']), {
+      widthFactor: 1,
+    });
+    expect(result.fields[0]!.width).toBeGreaterThan(exact.fields[0]!.width * 2);
   });
 
   it('recognises a template it has already prepared', async () => {
@@ -392,8 +406,11 @@ describe('a prepared template, once filled', () => {
  */
 describe('checking a prepared template against the data', () => {
   it('predicts exactly the fields that filling shrinks', async () => {
+    // Fields exactly as wide as their placeholders, so a longer value has to
+    // shrink and the agreement being checked is not vacuous.
     const prepared = await preparePdfTemplate(
       await letter(['Name: {{FULL_NAME}}', 'Title: {{JOB_TITLE}}']),
+      { widthFactor: 1 },
     );
     // Long enough to need shrinking, short enough to still fit legibly.
     const records = [{ FULL_NAME: 'Aisha', JOB_TITLE: 'Senior Data Analyst' }];

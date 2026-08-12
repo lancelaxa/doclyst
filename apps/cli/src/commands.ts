@@ -140,8 +140,8 @@ export async function prepareCommand(args: ParsedArgs, ctx: CommandContext): Pro
   }
 
   const widen = getString(args, 'widen');
-  const widthFactor = widen === undefined ? 1 : Number.parseFloat(widen);
-  if (!Number.isFinite(widthFactor) || widthFactor <= 0) {
+  const widthFactor = widen === undefined ? undefined : Number.parseFloat(widen);
+  if (widthFactor !== undefined && (!Number.isFinite(widthFactor) || widthFactor <= 0)) {
     ctx.error('--widen must be a positive number, e.g. 1.5.');
     return 2;
   }
@@ -152,7 +152,10 @@ export async function prepareCommand(args: ParsedArgs, ctx: CommandContext): Pro
     return 2;
   }
 
-  const result = await preparePdfTemplate(template.bytes, { widthFactor });
+  const result = await preparePdfTemplate(
+    template.bytes,
+    widthFactor === undefined ? {} : { widthFactor },
+  );
 
   ctx.log(`Prepared ${result.fields.length} field(s) from ${basename(templatePath)}:`);
   for (const field of result.fields) {

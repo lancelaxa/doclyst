@@ -26,15 +26,21 @@ import {
  * text that follows them on the line keeps its position exactly.
  */
 
+/** Generous, and safe: widening stops at whatever follows on the line. */
+const DEFAULT_WIDTH_FACTOR = 3;
+
 export interface PrepareTemplateOptions {
   /**
-   * Extra width, as a multiple of the placeholder's own width, to allow for
-   * values longer than the placeholder text. Defaults to 1 — no extra.
+   * Field width as a multiple of the placeholder's own. Defaults to 3.
    *
-   * A placeholder is rarely as wide as the value that replaces it, and a form
-   * field hides what does not fit, so some slack is usually wanted. It is not
-   * the default because widening a field can push it over neighbouring text,
-   * which only the template's author can judge.
+   * `{{CANDIDATE_NAME}}` is narrower than most names, and a form field hides
+   * whatever does not fit, so a field the exact width of its placeholder is
+   * the wrong shape for the data almost every time.
+   *
+   * This defaulted to 1 — no extra — back when widening really could push a
+   * field over the words after it. It cannot any more: widening now stops at
+   * the next text on the line, so the generous default costs nothing and a
+   * placeholder that has room to spare gets it.
    */
   readonly widthFactor?: number;
   /** Leave the placeholder text visible under the field. Off by default. */
@@ -112,7 +118,7 @@ export async function preparePdfTemplate(
   const existing = new Set(doc.getForm().getFields().map((field) => field.getName()));
   /** Fields the template arrived with, kept for the "already prepared" case. */
   const alreadyPresent = new Set(existing);
-  const widthFactor = options.widthFactor ?? 1;
+  const widthFactor = options.widthFactor ?? DEFAULT_WIDTH_FACTOR;
 
   const skipped: { name: string; reason: string }[] = [];
 

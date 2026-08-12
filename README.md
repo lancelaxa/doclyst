@@ -249,7 +249,7 @@ fields. `fill` renders one document per row.
 | Option | Meaning |
 |---|---|
 | `--output <format>` | `docx` (default) or `pdf`, for a DOCX template |
-| `--widen <factor>` | `prepare` only: field width as a multiple of the placeholder's |
+| `--widen <factor>` | `prepare` only: field width as a multiple of the placeholder's; defaults to 3 |
 | `--sheet <name\|index>` | Worksheet to read from an `.xlsx`; defaults to the first |
 | `--filename <pattern>` | Output name pattern; `{{ROW}}` is always available |
 | `--missing <policy>` | `error` (default), `empty`, `keep` |

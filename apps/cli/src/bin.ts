@@ -30,10 +30,11 @@ Required for fill
   --zip <file>          Also, or instead, write a single ZIP archive.
 
 Options for prepare
-  --widen <factor>      Make each field wider than the placeholder it
-                        replaces, e.g. 1.5. Defaults to 1. A form field hides
-                        what does not fit, and a real value is usually longer
-                        than "{{NAME}}".
+  --widen <factor>      Field width as a multiple of the placeholder's own.
+                        Defaults to 3, because a real value is usually longer
+                        than "{{NAME}}" and a form field hides what does not
+                        fit. Widening stops at the next text on the line, so a
+                        larger factor cannot cause an overlap.
 
 Options
   --sheet <name|index>  Worksheet to read from an .xlsx. Defaults to the

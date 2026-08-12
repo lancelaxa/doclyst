@@ -299,9 +299,11 @@ when it exports, so a letter saved from Word is usually well under 200 KB.
 ### Making the fields wider
 
 A real value is usually longer than `{{FULL_NAME}}`, and a form field hides
-whatever does not fit. In the browser the fields are made the size of the
-placeholder; on the command line, `--widen 1.5` makes each one half as wide
-again:
+whatever does not fit, so every field is made three times the width of the
+placeholder it replaces. Nothing to set — that is what preparing does, in the
+browser and on the command line alike.
+
+On the command line `--widen` overrides it:
 
 ```bash
 node apps/cli/dist/bin.js prepare \
@@ -315,10 +317,9 @@ cannot cause the two to overlap. Where there is not enough room, the value
 shrinks to fit and you are told which fields that happened to.
 
 **Be generous with the factor.** Because widening stops at the text that
-follows, a large number is safe: `--widen 4` gives a placeholder sitting alone
-on its line most of the page, while leaving one in a table row exactly as
-wide as its column allows. If `inspect` still reports a field as too small,
-raising the factor is the first thing to try.
+follows, a large number is safe: `--widen 6` gives a placeholder sitting alone
+on its line most of the page, while leaving one in a table row exactly as wide
+as its column allows.
 
 If you would rather place the fields by hand, any PDF editor will do it —
 Acrobat (Prepare a Form), LibreOffice Draw, or Xournal++. Doclyst fills a
