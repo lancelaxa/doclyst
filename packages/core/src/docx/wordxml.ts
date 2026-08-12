@@ -207,3 +207,21 @@ export function extractTextFromXml(xml: string): string {
     .map((group) => group.map((node) => node.text).join(''))
     .join('\n');
 }
+
+/**
+ * The visible text of a document part, including its tabs and line breaks.
+ *
+ * {@link extractTextFromXml} sees only `<w:t>` nodes, because that is what
+ * placeholder matching needs — a tab inside a placeholder would be a mistake,
+ * not something to match across. But a reader sees tabs, and a label/value
+ * layout is nothing but tabs: without them `Position\tData Analyst` reads back
+ * as `PositionData Analyst`, which looks like lost text and is not.
+ */
+export function extractVisibleText(xml: string): string {
+  // Tabs and breaks are turned into their characters before the text nodes are
+  // collected, so they keep their place in the run order.
+  const marked = xml
+    .replace(/<w:tab\b[^>]*\/>/g, '<w:t>\t</w:t>')
+    .replace(/<w:br\b[^>]*\/>/g, '<w:t>\n</w:t>');
+  return extractTextFromXml(marked);
+}

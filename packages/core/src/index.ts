@@ -66,6 +66,7 @@ export {
 export {
   replacePlaceholdersInXml,
   extractTextFromXml,
+  extractVisibleText,
   type PlaceholderResolver,
 } from './docx/wordxml.js';
 

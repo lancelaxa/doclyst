@@ -3,7 +3,12 @@ import { FIXED_ARCHIVE_TIMESTAMP } from '../internal/deterministic.js';
 import { withChosenLevel, type ZipEntryInput } from '../internal/compression.js';
 import { DoclystError, safeErrorSummary } from '../errors.js';
 import { extractFieldNames } from '../template/placeholder.js';
-import { extractTextFromXml, replacePlaceholdersInXml, type PlaceholderResolver } from './wordxml.js';
+import {
+  extractTextFromXml,
+  extractVisibleText,
+  replacePlaceholdersInXml,
+  type PlaceholderResolver,
+} from './wordxml.js';
 
 /**
  * DOCX template filling.
@@ -60,7 +65,7 @@ export function readDocxText(template: Uint8Array): string {
   if (!body) {
     throw new DoclystError('INVALID_TEMPLATE', 'The DOCX file has no word/document.xml part.');
   }
-  return extractTextFromXml(strFromU8(body));
+  return extractVisibleText(strFromU8(body));
 }
 
 export interface DocxFillResult {

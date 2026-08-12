@@ -271,6 +271,14 @@ Position:        {{JOB_TITLE}}
 Monthly salary:  {{BASIC_SALARY}}
 ```
 
+### Long values need their own line
+
+A label and its value share a line, so the value only gets the width to the
+right of the label — often not much. For a value that is a sentence rather than
+a word (a bonus description, a list of pre-conditions), put the label on one
+line and the placeholder on the next, at the left margin. It then has the full
+width of the page.
+
 ### Repeated placeholders
 
 Use the same placeholder as often as you like. `{{COMPANY_NAME}}` in the
@@ -305,6 +313,12 @@ node apps/cli/dist/bin.js prepare \
 A field is never widened over the text that follows it on a line, so this
 cannot cause the two to overlap. Where there is not enough room, the value
 shrinks to fit and you are told which fields that happened to.
+
+**Be generous with the factor.** Because widening stops at the text that
+follows, a large number is safe: `--widen 4` gives a placeholder sitting alone
+on its line most of the page, while leaving one in a table row exactly as
+wide as its column allows. If `inspect` still reports a field as too small,
+raising the factor is the first thing to try.
 
 If you would rather place the fields by hand, any PDF editor will do it —
 Acrobat (Prepare a Form), LibreOffice Draw, or Xournal++. Doclyst fills a

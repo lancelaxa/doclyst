@@ -239,3 +239,30 @@ describe('readDocxText', () => {
     expect(readDocxText(docx)).toBe('one\ntwo');
   });
 });
+
+/**
+ * Reading a document's visible text.
+ *
+ * A label/value layout is nothing but tabs, and dropping them made
+ * `Position\tData Analyst` read back as `PositionData Analyst` — which looks
+ * exactly like lost text when nothing has been lost.
+ */
+describe('readDocxText', () => {
+  it('keeps the tabs that separate a label from its value', () => {
+    const docx = buildDocx(para('<w:r><w:t>Position</w:t><w:tab/><w:t>Data Analyst</w:t></w:r>'));
+    expect(readDocxText(docx)).toBe('Position\tData Analyst');
+  });
+
+  it('keeps a line break as a line break', () => {
+    const docx = buildDocx(para('<w:r><w:t>Line one</w:t><w:br/><w:t>Line two</w:t></w:r>'));
+    expect(readDocxText(docx)).toBe('Line one\nLine two');
+  });
+
+  it('reads a filled document the same way it reads the template', () => {
+    // The two are compared against each other constantly; a tab surviving in
+    // one and not the other reports every document as wrong.
+    const template = buildDocx(para('<w:r><w:t>Position</w:t><w:tab/><w:t>{{JOB_TITLE}}</w:t></w:r>'));
+    const filled = fillDocx(template, () => 'Data Analyst').bytes;
+    expect(readDocxText(filled)).toBe(readDocxText(template).replace('{{JOB_TITLE}}', 'Data Analyst'));
+  });
+});
