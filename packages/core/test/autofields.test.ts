@@ -4,6 +4,7 @@ import { unzlibSync } from 'fflate';
 import { DoclystError } from '../src/errors.js';
 import { preparePdfTemplate } from '../src/pdf/autofields.js';
 import { checkPdfTemplateFit, fillPdf, readPdfFields } from '../src/pdf/fill.js';
+import { runBatch } from '../src/batch/run.js';
 import { readGlyphs, readPageContent, readPageFonts } from '../src/pdf/content.js';
 
 /**
@@ -420,5 +421,51 @@ describe('checking a prepared template against the data', () => {
       { FULL_NAME: 'Aisha' },
     ]);
     expect(reports[0]).toMatchObject({ field: 'FULL_NAME', outcome: 'fits' });
+  });
+});
+
+/**
+ * A value the template's font cannot spell.
+ *
+ * The appearance streams for a prepared template are written by Doclyst, which
+ * means pdf-lib's own generation is switched off — so a field left undrawn is a
+ * field left blank. A Chinese or Tamil name vanished from the finished letter
+ * with nothing said, which is the exact failure the whole design exists to
+ * prevent: the candidate receives a letter with a gap where their name belongs.
+ */
+describe('a value the template font cannot draw', () => {
+  it('fails the record rather than leaving the field blank', async () => {
+    const prepared = await preparePdfTemplate(await letter(['Dear {{FULL_NAME}},']));
+    await expect(fillPdf(prepared.bytes, () => '陈家豪', {})).rejects.toThrow(DoclystError);
+  });
+
+  it('names the field and counts the characters, without quoting the name', async () => {
+    const name = 'முருகன்';
+    const prepared = await preparePdfTemplate(await letter(['Dear {{FULL_NAME}},']));
+    const error = await fillPdf(prepared.bytes, () => name, {}).catch((e: unknown) => e);
+
+    expect((error as DoclystError).field).toBe('FULL_NAME');
+    expect((error as DoclystError).message).not.toContain(name);
+    expect((error as DoclystError).message).toMatch(/\d+ character\(s\)/);
+  });
+
+  it('still draws a name the font does cover', async () => {
+    const prepared = await preparePdfTemplate(await letter(['Dear {{FULL_NAME}},']));
+    const filled = await fillPdf(prepared.bytes, () => 'José Muñoz', {});
+    expect(drawnText(filled.bytes)).toContain('Jos');
+  });
+
+  it('fails only that record, leaving the rest of the batch alone', async () => {
+    const prepared = await preparePdfTemplate(await letter(['Dear {{FULL_NAME}},']));
+    const result = await runBatch(
+      { kind: 'pdf', bytes: prepared.bytes },
+      [{ FULL_NAME: 'Aisha Rahman' }, { FULL_NAME: '陈家豪' }, { FULL_NAME: 'Priya Nair' }],
+      { missing: 'empty' },
+    );
+
+    expect(result.documents).toHaveLength(2);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]!.row).toBe(2);
+    expect(result.failures[0]!.message).not.toContain('陈');
   });
 });

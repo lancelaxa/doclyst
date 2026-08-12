@@ -362,6 +362,20 @@ It never silently truncates. A value too wide for its box is shrunk to fit,
 down to 6pt, and the affected fields are listed after the run. Below 6pt the
 text would be there but unreadable, so that row fails and is reported instead.
 
+### Names the template's font cannot spell
+
+A PDF template draws each value in the font the placeholder was in — and a font
+carries only the scripts it was built for. A letter typed in a Latin font has no
+glyphs for Chinese, Tamil, or Jawi script.
+
+Those records **fail and are reported**; they are not quietly left blank. The
+message names the field and counts the characters, never the name itself, so it
+is safe to paste into a ticket.
+
+If your staff list includes such names, either build the template in a font that
+covers them (Word will embed whatever you use), or generate DOCX for those
+records and convert them yourself. The rest of the batch is unaffected.
+
 ### A note on fonts
 
 A prepared field draws its value in the same font the placeholder was in, so

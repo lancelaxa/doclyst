@@ -261,7 +261,7 @@ function drawAdoptedFields(
     if (value === `{{${key}}}`) continue;
 
     const font = readFontFromDict(fontDict);
-    if (drawFieldValue(doc, form, field, formFonts, name, font, size, value) === 'drawn') {
+    if (drawFieldValue(doc, form, field, formFonts, name, font, size, value, key) === 'drawn') {
       drawn += 1;
     }
   }
@@ -307,12 +307,22 @@ function drawFieldValue(
   font: FontInfo,
   size: number,
   value: string,
+  key: string,
 ): 'drawn' | 'skipped' {
-  // A font that cannot spell the value is not used for it. Leaving the field to
-  // pdf-lib's default font shows the value in the wrong typeface, which is far
-  // better than showing it with holes where letters should be.
+  // A font that cannot spell the value cannot draw it, and there is nothing to
+  // fall back to: the appearance streams are written here precisely because
+  // pdf-lib's own generation is switched off, so a field left undrawn is a
+  // field left blank. That silently removed a Chinese or Tamil name from an
+  // offer letter and said nothing — the candidate would have received a letter
+  // with a gap where their name belongs. It fails the record instead.
   const codes = font.encode(value);
-  if (codes === undefined) return 'skipped';
+  if (codes === undefined) {
+    throw new DoclystError(
+      'RENDER_FAILED',
+      `The template's own font cannot draw the value for "${key}" — ${countUndrawable(font, value)} character(s) are missing from it. That usually means a name in a script the document was not written in. Generate DOCX for these records instead, or rebuild the template in a font that covers them.`,
+      { field: key },
+    );
+  }
 
   const widgets = field.acroField.getWidgets();
   if (widgets.length === 0) return 'skipped';
@@ -356,6 +366,19 @@ function drawFieldValue(
   // would replace what was just drawn with its own default font.
   form.markFieldAsClean(field.ref);
   return 'drawn';
+}
+
+/**
+ * How many of a value's characters the font has no glyph for.
+ *
+ * Counted, never quoted: the text that failed is most often somebody's name.
+ */
+function countUndrawable(font: FontInfo, value: string): number {
+  let missing = 0;
+  for (const character of value) {
+    if (font.encode(character) === undefined) missing += 1;
+  }
+  return missing;
 }
 
 /**
