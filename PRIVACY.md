@@ -5,6 +5,30 @@ numbers, salaries, addresses, phone numbers, dates of birth. This document
 describes the controls that follow from that assumption, and is meant to be
 specific enough to verify against the code.
 
+## In short
+
+For anyone who needs the answer rather than the reasoning:
+
+- **Nothing is uploaded.** There is no server, no account and no telemetry. The
+  browser version is blocked by the browser itself from making any network
+  request, so it could not transmit your data even if it were asked to.
+- **Nothing is kept.** Documents are built in memory and written only where you
+  say. No temporary files, no caches, no database, no history. Closing the tab
+  discards everything.
+- **Generated files are private on disk.** They are readable only by the person
+  who created them, so a folder of payslips cannot become readable by everyone
+  on a shared machine.
+- **Personal data never reaches an error message or a log.** Messages name the
+  field and the row — never the value — so they are safe to screenshot or paste
+  into a ticket.
+- **The author's details do not travel.** The template's author, company and
+  timestamps are stripped from every generated document by default.
+- **No AI is involved.** No model, no inference, no third-party service. It is
+  a deterministic tool: the same inputs always produce the same bytes.
+
+Everything below is the detail behind those claims, written to be checked
+against the code rather than taken on trust.
+
 ## Scope and limits
 
 **Doclyst is not a compliance product.** It is designed with Singapore PDPA

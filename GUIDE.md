@@ -1,17 +1,19 @@
 # How to use Doclyst
 
-A practical walkthrough: prepare a template, prepare a spreadsheet, generate
-one document per person. No programming needed for the browser version.
+A practical walkthrough: set up a template, prepare your spreadsheet, and
+generate one document per person. Nothing to install, and no programming.
 
 - [Opening Doclyst (no terminal needed)](#opening-doclyst-no-terminal-needed)
 - [Try it in two minutes](#try-it-in-two-minutes)
-- [Step 1 — Prepare your template](#step-1--prepare-your-template)
-- [Step 2 — Prepare your spreadsheet](#step-2--prepare-your-spreadsheet)
+- [Step 1 — Your template](#step-1--your-template)
+- [Step 2 — Your spreadsheet](#step-2--your-spreadsheet)
 - [Step 3 — Generate the documents](#step-3--generate-the-documents)
+- [Working with PDF templates](#working-with-pdf-templates)
+- [Getting PDFs from a Word template](#getting-pdfs-from-a-word-template)
 - [Naming the output files](#naming-the-output-files)
 - [When a value is missing](#when-a-value-is-missing)
 - [Large batches](#large-batches)
-- [Using the command line](#using-the-command-line)
+- [Using it from a terminal](#using-it-from-a-terminal)
 - [When something goes wrong](#when-something-goes-wrong)
 - [Handling personal data responsibly](#handling-personal-data-responsibly)
 
@@ -58,19 +60,14 @@ is updated.
 > `doclyst.html` file from Option A directly instead.
 
 **Hosting the page does not mean hosting your data.** The page is downloaded to
-your browser and does all its work there. Its Content-Security-Policy blocks it
-from making network requests at all, so it could not send your spreadsheet
-anywhere even if it tried. Once loaded, you can disconnect from the internet
+your browser and does all its work there. The browser itself blocks the page
+from making any network request, so it could not send your spreadsheet anywhere
+even if it tried. Once loaded, you can disconnect from the internet
 and it keeps working.
 
 *(If the link ever stops working, it is served by GitHub Pages: check
 Settings → Pages → Source is set to **GitHub Actions**, then re-run the latest
 workflow from the Actions tab.)*
-
-### Option C — build it yourself
-
-Only if you want to change the code. See [Try it in two
-minutes](#try-it-in-two-minutes) below.
 
 ### Which files can I open it with?
 
@@ -81,18 +78,9 @@ uploaded, no account is needed, and closing the tab discards everything.
 
 ## Try it in two minutes
 
-If you just want to see it work, generate a sample template and spreadsheet:
-
-```bash
-npm install
-npm run build
-node examples/make-example.mjs      # writes examples/offer-letter.docx + staff.csv
-npm run dev:web
-```
-
-Open the address it prints, drop in `examples/offer-letter.docx` and
-`examples/staff.csv`, and press **Generate documents**. You should get four
-offer letters.
+Open Doclyst, drop in a template and a spreadsheet, and press
+**Generate documents**. There is a ready-made pair in the `examples` folder of
+the repository if you want something to practise on before using your own.
 
 ---
 
@@ -220,7 +208,7 @@ documents:
 
 ### In the browser
 
-1. Open the page (`npm run dev:web`, or open the built `index.html`).
+1. Open Doclyst — the hosted link, or your copy of `doclyst.html`.
 2. **Drop your template** into the first box, or click to choose it.
    Doclyst lists the placeholders it found — check they look right.
    *If it is a PDF that still has `{{PLACEHOLDERS}}` written in it, press
@@ -296,30 +284,16 @@ files. Four hundred letters from a 100 KB template come to about 40 MB; from a
 If your template is large, it is almost always the fonts. Word subsets them
 when it exports, so a letter saved from Word is usually well under 200 KB.
 
-### Making the fields wider
+### How wide the fields are
 
 A real value is usually longer than `{{FULL_NAME}}`, and a form field hides
-whatever does not fit, so every field is made three times the width of the
-placeholder it replaces. Nothing to set — that is what preparing does, in the
-browser and on the command line alike.
+whatever does not fit — so each field is made three times the width of the
+placeholder it replaces. There is nothing to set: that is simply what preparing
+does.
 
-On the command line `--widen` overrides it:
-
-```bash
-node apps/cli/dist/bin.js prepare \
-  --template offer-letter.pdf \
-  --out offer-letter-template.pdf \
-  --widen 1.5
-```
-
-A field is never widened over the text that follows it on a line, so this
-cannot cause the two to overlap. Where there is not enough room, the value
-shrinks to fit and you are told which fields that happened to.
-
-**Be generous with the factor.** Because widening stops at the text that
-follows, a large number is safe: `--widen 6` gives a placeholder sitting alone
-on its line most of the page, while leaving one in a table row exactly as wide
-as its column allows.
+A field is never widened over the text that follows it on the same line, so it
+cannot end up printing on top of anything. Where there is not enough room, the
+value shrinks to fit and you are told which fields that happened to.
 
 If you would rather place the fields by hand, any PDF editor will do it —
 Acrobat (Prepare a Form), LibreOffice Draw, or Xournal++. Doclyst fills a
@@ -404,9 +378,8 @@ difference is visible.
 
 ## Getting PDFs from a Word template
 
-Set **Output format** to *PDF* in the browser, or pass `--output pdf` on the
-command line. A PDF template always produces PDF, so the setting only applies
-to Word templates.
+Set **Options → Output format** to *PDF*. A PDF template always produces PDF,
+so the setting only applies to Word templates.
 
 **What you get.** The wording is exactly the wording in your template, with
 bold, italic, font sizes and paragraph alignment preserved. The layout is
@@ -507,77 +480,10 @@ A few hundred documents is routine. For bigger or heavier jobs:
 
 ---
 
-## Using the command line
+## Using it from a terminal
 
-Useful for repeat runs and scheduled jobs. Same engine, same results.
-
-**Prepare a PDF template** — only for a PDF that still has placeholders
-written into it, and only once per template:
-
-```bash
-node apps/cli/dist/bin.js prepare \
-  --template offer-letter.pdf \
-  --out offer-letter-template.pdf
-```
-
-**Check before you run** — this catches mapping mistakes, and sizing mistakes,
-without producing anything:
-
-```bash
-node apps/cli/dist/bin.js inspect \
-  --template offer-letter.docx \
-  --data staff.csv
-```
-
-```
-Template: offer-letter.docx (docx)
-  Fields (5): FULL_NAME, JOB_TITLE, BASIC_SALARY, START_DATE, STAFF_ID
-Data: staff.csv
-  Rows: 4
-  Columns (5): Full Name, Job Title, Basic Salary, Start Date, Staff ID
-
-Every template placeholder has a matching column.
-```
-
-For a PDF template it also measures every field against the widest value in
-your data, and exits non-zero if one cannot fit — so a scheduled job stops
-rather than sending letters with a missing address.
-
-**Generate:**
-
-```bash
-node apps/cli/dist/bin.js fill \
-  --template offer-letter.docx \
-  --data staff.csv \
-  --out ./letters \
-  --filename "{{STAFF_ID}}-offer"
-```
-
-Add `--dry-run` first to see what would be produced without writing anything.
-
-Useful options:
-
-| Option | What it does |
-|---|---|
-| `--zip out.zip` | Also (or instead) write one ZIP |
-| `--sheet "Sheet2"` | Choose a worksheet by name or number |
-| `--output pdf` | Write PDFs from a Word template (see above) |
-| `--widen 1.5` | `prepare` only: make each field wider than its placeholder |
-| `--missing empty` | Blank out missing values instead of failing the row |
-| `--empty-is-missing` | Treat blank cells as missing |
-| `--dry-run` | Report what would happen; write nothing |
-| `--force` | Overwrite existing files |
-| `--stop-on-error` | Stop at the first bad row instead of continuing |
-
-Output goes into a folder only you can read (`0700`), with files only you can
-read (`0600`), plus a `manifest.csv` recording which row produced which file
-and what failed. The manifest contains **no field values** — only row numbers,
-filenames and outcomes, so it is safe to keep or attach to a ticket.
-
-Exit codes: `0` all good, `1` finished with some failed rows (or a template
-field too small), `2` wrong usage.
-
-Run `node apps/cli/dist/bin.js --help` for the full list.
+There is a command-line version, useful for scheduled or repeated runs. It is
+documented in [DEVELOPING.md](DEVELOPING.md) — nothing in this guide needs it.
 
 ---
 
