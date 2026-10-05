@@ -1,6 +1,6 @@
 import { unzipSync, strFromU8 } from 'fflate';
 import { DoclystError, safeErrorSummary } from '../errors.js';
-import { decodeXmlText } from '../docx/xml.js';
+import { decodeXmlText, replaceElements, scanElements } from '../docx/xml.js';
 import { DEFAULT_MAX_COLUMNS, DEFAULT_MAX_ROWS } from './csv.js';
 
 /**
@@ -225,10 +225,8 @@ function usesEpoch1904(entries: Record<string, Uint8Array>): boolean {
 
 // --- shared strings --------------------------------------------------------
 
-const SI_RE = /<si\b[^>]*>([\s\S]*?)<\/si>|<si\b[^>]*\/>/g;
-const T_RE = /<t\b[^>]*>([\s\S]*?)<\/t>|<t\b[^>]*\/>/g;
-/** Phonetic guide text; displayed separately, so not part of the cell value. */
-const RPH_RE = /<rPh\b[^>]*>[\s\S]*?<\/rPh>/g;
+// Elements are found with `scanElements` rather than lazy regular
+// expressions, which take quadratic time on a part full of unclosed tags.
 
 function readSharedStrings(entries: Record<string, Uint8Array>): string[] {
   const bytes = entries['xl/sharedStrings.xml'];
@@ -236,11 +234,7 @@ function readSharedStrings(entries: Record<string, Uint8Array>): string[] {
 
   const xml = strFromU8(bytes);
   const strings: string[] = [];
-  SI_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = SI_RE.exec(xml)) !== null) {
-    strings.push(collectText(match[1] ?? ''));
-  }
+  for (const element of scanElements(xml, 'si')) strings.push(collectText(element.body ?? ''));
   return strings;
 }
 
@@ -251,13 +245,10 @@ function readSharedStrings(entries: Record<string, Uint8Array>): string[] {
  * only the first would silently truncate the value.
  */
 function collectText(xml: string): string {
-  const withoutPhonetics = xml.replace(RPH_RE, '');
+  // Phonetic guide text is displayed separately, so it is not part of the value.
+  const withoutPhonetics = replaceElements(xml, 'rPh', () => '');
   let out = '';
-  T_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = T_RE.exec(withoutPhonetics)) !== null) {
-    out += decodeXmlText(match[1] ?? '');
-  }
+  for (const element of scanElements(withoutPhonetics, 't')) out += decodeXmlText(element.body ?? '');
   return out;
 }
 
@@ -267,8 +258,6 @@ function collectText(xml: string): string {
 const BUILTIN_DATE_FORMATS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 45, 46, 47]);
 
 const NUMFMT_RE = /<numFmt\b([^>]*)\/?>/g;
-const CELLXFS_RE = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/;
-const XF_RE = /<xf\b([^>]*?)(?:\/>|>[\s\S]*?<\/xf>)/g;
 
 /**
  * Work out which style indices mean "this number is a date".
@@ -294,11 +283,10 @@ function readDateStyles(entries: Record<string, Uint8Array>): Set<number> {
     if (Number.isFinite(id) && looksLikeDateFormat(code)) customDateFormats.add(id);
   }
 
-  const cellXfs = CELLXFS_RE.exec(xml)?.[1] ?? '';
+  const cellXfs = scanElements(xml, 'cellXfs').next().value?.body ?? '';
   let styleIndex = 0;
-  XF_RE.lastIndex = 0;
-  while ((match = XF_RE.exec(cellXfs)) !== null) {
-    const id = Number.parseInt(attribute(match[1] ?? '', 'numFmtId') ?? '', 10);
+  for (const xf of scanElements(cellXfs, 'xf')) {
+    const id = Number.parseInt(attribute(xf.attrs, 'numFmtId') ?? '', 10);
     if (Number.isFinite(id) && (BUILTIN_DATE_FORMATS.has(id) || customDateFormats.has(id))) {
       dateStyles.add(styleIndex);
     }
@@ -323,10 +311,6 @@ function looksLikeDateFormat(code: string): boolean {
 
 // --- worksheet -------------------------------------------------------------
 
-const ROW_RE = /<row\b([^>]*)>([\s\S]*?)<\/row>|<row\b[^>]*\/>/g;
-const CELL_RE = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
-const V_RE = /<v\b[^>]*>([\s\S]*?)<\/v>|<v\b[^>]*\/>/;
-const IS_RE = /<is\b[^>]*>([\s\S]*?)<\/is>/;
 
 interface SheetContext {
   readonly sharedStrings: readonly string[];
@@ -339,22 +323,18 @@ interface SheetContext {
 function readSheet(xml: string, ctx: SheetContext): string[][] {
   const rows: string[][] = [];
 
-  ROW_RE.lastIndex = 0;
-  let rowMatch: RegExpExecArray | null;
-  while ((rowMatch = ROW_RE.exec(xml)) !== null) {
-    const body = rowMatch[2];
+  for (const row of scanElements(xml, 'row')) {
+    const body = row.body;
     if (body === undefined) {
       rows.push([]);
       continue;
     }
 
     const cells: string[] = [];
-    CELL_RE.lastIndex = 0;
-    let cellMatch: RegExpExecArray | null;
     let position = 0;
 
-    while ((cellMatch = CELL_RE.exec(body)) !== null) {
-      const attrs = cellMatch[1] ?? '';
+    for (const cell of scanElements(body, 'c')) {
+      const attrs = cell.attrs;
       const reference = attribute(attrs, 'r');
       // A sparse row omits empty cells entirely, so the cell reference is what
       // keeps later columns aligned with their headers.
@@ -366,7 +346,7 @@ function readSheet(xml: string, ctx: SheetContext): string[][] {
         );
       }
       while (cells.length < column) cells.push('');
-      cells.push(readCell(attrs, cellMatch[2] ?? '', ctx));
+      cells.push(readCell(attrs, cell.body ?? '', ctx));
       position = column + 1;
     }
 
@@ -389,10 +369,10 @@ function readCell(attrs: string, body: string, ctx: SheetContext): string {
   const type = attribute(attrs, 't') ?? 'n';
 
   if (type === 'inlineStr') {
-    return collectText(IS_RE.exec(body)?.[1] ?? '');
+    return collectText(scanElements(body, 'is').next().value?.body ?? '');
   }
 
-  const raw = decodeXmlText(V_RE.exec(body)?.[1] ?? '');
+  const raw = decodeXmlText(scanElements(body, 'v').next().value?.body ?? '');
   if (raw === '') return '';
 
   switch (type) {

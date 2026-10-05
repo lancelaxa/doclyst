@@ -72,7 +72,40 @@ export interface Glyph {
   readonly fontSize: number;
   /** Bytes the font uses per character code, needed to rewrite the stream. */
   readonly bytesPerCode: number;
+  /** How the glyph is painted, which decides whether anyone can see it. */
+  readonly appearance: GlyphAppearance;
 }
+
+/**
+ * The parts of the graphics state that decide whether a glyph is visible.
+ *
+ * Text can be present in a file and still be invisible: drawn in white, in
+ * render mode 3, fully transparent, or outside the clipping area. Checking a
+ * signed letter has to tell those apart from text that is really on the page,
+ * or a copy with its salary hidden and a new one typed beside it would pass.
+ */
+export interface GlyphAppearance {
+  /** Lightness of the colour the glyph is painted in: 0 black, 1 white. */
+  readonly lightness: number;
+  /** Text render mode, 0–7. Modes 3 and 7 paint nothing. */
+  readonly renderMode: number;
+  /** Constant opacity of the paint, 0–1. */
+  readonly alpha: number;
+  /** True when a soft mask is in force, whose effect cannot be worked out here. */
+  readonly softMask: boolean;
+  /** The clipping area in force, as a box in page space; undefined for none. */
+  readonly clip: Box | undefined;
+}
+
+/** What a named graphics state (`/GS1 gs`) sets, as far as visibility goes. */
+export interface ExtGStateInfo {
+  readonly fillAlpha?: number;
+  readonly strokeAlpha?: number;
+  readonly softMask?: boolean;
+}
+
+/** How deeply arrays may nest in a content stream before it is refused. */
+const MAX_ARRAY_DEPTH = 32;
 
 /** A parsed content-stream operation. */
 export interface Operation {
@@ -120,9 +153,16 @@ export function parseOperations(content: string): Operation[] {
     if (token.token.kind === 'keyword') {
       const operator = token.token.value;
       // An inline image's binary data is not tokenisable; skip to its end.
+      // The end is an `EI` standing on its own — whitespace before it, and
+      // whitespace, a delimiter or the end after. Taking the first "EI"
+      // anywhere would let image bytes that happen to contain those two letters
+      // end the image early, and the rest of its data be read as drawing
+      // instructions — or, arranged the other way, let real instructions be
+      // skipped as image data and so go unseen.
       if (operator === 'BI') {
-        const end = content.indexOf('EI', token.next);
-        cursor = end < 0 ? content.length : end + 2;
+        const end = inlineImageEnd(content, token.next);
+        operations.push({ operator: 'BI', operands: [], start: operandStart, end });
+        cursor = end;
         operands = [];
         operandStart = -1;
         continue;
@@ -139,6 +179,16 @@ export function parseOperations(content: string): Operation[] {
   return operations;
 }
 
+/** Offset just past the `EI` that ends an inline image starting at `from`. */
+function inlineImageEnd(content: string, from: number): number {
+  const pattern = /[\s\0]EI(?=[\s\0()<>[\]{}/%]|$)/g;
+  // The data begins after `ID` and a single whitespace byte.
+  const data = content.indexOf('ID', from);
+  pattern.lastIndex = data < 0 ? from : data + 3;
+  const match = pattern.exec(content);
+  return match === null ? content.length : match.index + 3;
+}
+
 function skipWhitespaceAndComments(content: string, start: number): number {
   let cursor = start;
   for (;;) {
@@ -150,7 +200,7 @@ function skipWhitespaceAndComments(content: string, start: number): number {
   }
 }
 
-function readToken(content: string, start: number): { token: Token; next: number } | undefined {
+function readToken(content: string, start: number, depth = 0): { token: Token; next: number } | undefined {
   const char = content[start] as string;
 
   if (char === '(') return readLiteralString(content, start);
@@ -166,15 +216,25 @@ function readToken(content: string, start: number): { token: Token; next: number
     return { token: { kind: 'name', value: content.slice(start + 1, cursor) }, next: cursor };
   }
   if (char === '[') {
+    // Real content streams nest arrays one deep, for TJ. A file nesting them
+    // thousands deep exists only to exhaust the stack, so past the limit a
+    // bracket is read as an empty array and nothing more.
+    if (depth >= MAX_ARRAY_DEPTH) return { token: { kind: 'array', items: [] }, next: start + 1 };
     const items: Token[] = [];
     let cursor = start + 1;
     for (;;) {
       cursor = skipWhitespaceAndComments(content, cursor);
-      if (cursor >= content.length || content[cursor] === ']') {
-        return { token: { kind: 'array', items }, next: cursor + 1 };
-      }
-      const inner = readToken(content, cursor);
+      if (cursor >= content.length) return { token: { kind: 'array', items }, next: cursor };
+      if (content[cursor] === ']') return { token: { kind: 'array', items }, next: cursor + 1 };
+      const inner = readToken(content, cursor, depth + 1);
       if (inner === undefined) return { token: { kind: 'array', items }, next: cursor + 1 };
+      // An operator cannot be an array element. One here means the bracket was
+      // never closed, and the array ends where the instructions resume — or an
+      // unclosed "[" would swallow everything drawn after it, and whatever a
+      // viewer still shows of that would go unseen here.
+      if (inner.token.kind === 'keyword' && !['true', 'false', 'null'].includes(inner.token.value)) {
+        return { token: { kind: 'array', items }, next: cursor };
+      }
       items.push(inner.token);
       cursor = inner.next;
     }
@@ -303,8 +363,12 @@ export interface FontInfo {
 
 /** Read the fonts a page's resources make available, keyed by resource name. */
 export function readPageFonts(page: PDFPage): Map<string, FontInfo> {
+  return readResourceFonts(page.node.Resources());
+}
+
+/** Read the fonts a resource dictionary makes available, keyed by name. */
+export function readResourceFonts(resources: PDFDict | undefined): Map<string, FontInfo> {
   const fonts = new Map<string, FontInfo>();
-  const resources = page.node.Resources();
   const fontDict = resources?.lookup(PDFName.of('Font'));
   if (!(fontDict instanceof PDFDict)) return fonts;
 
@@ -623,11 +687,11 @@ function readToUnicode(font: PDFDict): Map<number, string> | undefined {
 
 // --- replaying the text operators ---------------------------------------
 
-type Matrix = readonly [number, number, number, number, number, number];
+export type Matrix = readonly [number, number, number, number, number, number];
 
-const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
+export const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 
-function multiply(a: Matrix, b: Matrix): Matrix {
+export function multiply(a: Matrix, b: Matrix): Matrix {
   return [
     a[0] * b[0] + a[1] * b[2],
     a[0] * b[1] + a[1] * b[3],
@@ -696,12 +760,46 @@ export function writePageContent(page: PDFPage, content: string): void {
  * not know — so callers treat an empty or partial result as "cannot prepare
  * this page" rather than as "the page has no text".
  */
-export function readGlyphs(content: string, fonts: ReadonlyMap<string, FontInfo>): Glyph[] {
+export function readGlyphs(
+  content: string,
+  fonts: ReadonlyMap<string, FontInfo>,
+  options: ReadGlyphsOptions = {},
+): Glyph[] {
   const operations = parseOperations(content);
   const glyphs: Glyph[] = [];
 
-  const stack: Matrix[] = [];
-  let ctm: Matrix = IDENTITY;
+  interface State {
+    ctm: Matrix;
+    fillLightness: number;
+    strokeLightness: number;
+    fillAlpha: number;
+    strokeAlpha: number;
+    softMask: boolean;
+    clip: Box | undefined;
+    renderMode: number;
+  }
+  const stack: State[] = [];
+  let ctm: Matrix = options.ctm ?? IDENTITY;
+  /** Lightness of the fill and stroke colours, 0 for black to 1 for white. */
+  let fillLightness = options.inherit?.lightness ?? 0;
+  let strokeLightness = options.inherit?.lightness ?? 0;
+  let fillAlpha = options.inherit?.alpha ?? 1;
+  let strokeAlpha = options.inherit?.alpha ?? 1;
+  let softMask = options.inherit?.softMask ?? false;
+  let clip: Box | undefined = options.inherit?.clip;
+  let renderMode = 0;
+  /** Points of the path under construction, already in page space. */
+  let path: [number, number][] = [];
+  /** Whether that path is made only of rectangles, the shape of a cover-up. */
+  let pathIsRectangles = true;
+  /** Whether that path has any curve in it, which no cover-up box has. */
+  let pathHasCurves = false;
+  /** Set by `W` or `W*`: the path becomes the clip when it is next painted. */
+  let pendingClip = false;
+  const point = (x: number, y: number): [number, number] => [
+    x * ctm[0] + y * ctm[2] + ctm[4],
+    x * ctm[1] + y * ctm[3] + ctm[5],
+  ];
   let textMatrix: Matrix = IDENTITY;
   let lineMatrix: Matrix = IDENTITY;
 
@@ -715,6 +813,25 @@ export function readGlyphs(content: string, fonts: ReadonlyMap<string, FontInfo>
 
   const numbers = (operands: readonly Token[]): number[] =>
     operands.filter((token) => token.kind === 'number').map((token) => token.value);
+
+  const paintInfo = (stroke: boolean): PaintInfo => ({
+    lightness: stroke ? strokeLightness : fillLightness,
+    alpha: stroke ? strokeAlpha : fillAlpha,
+    softMask,
+    // A box drawn as four straight lines is as much a box as one drawn with
+    // `re`; plenty of producers write rectangles that way.
+    rectangles: path.length > 0 && !pathHasCurves && (pathIsRectangles || isAxisAlignedBox(path)),
+    clip,
+  });
+
+  /** Finish a path: apply a pending clip, and start afresh. */
+  const endPath = (): void => {
+    if (pendingClip && path.length > 0) clip = intersectBoxes(clip, boxOf(path));
+    pendingClip = false;
+    path = [];
+    pathIsRectangles = true;
+    pathHasCurves = false;
+  };
 
   const show = (bytes: number[], operationIndex: number, startIndex: number): number => {
     const font = fonts.get(fontName);
@@ -760,6 +877,13 @@ export function readGlyphs(content: string, fonts: ReadonlyMap<string, FontInfo>
         font: fontName,
         fontSize,
         bytesPerCode: step,
+        appearance: {
+          lightness: renderMode === 1 || renderMode === 5 ? strokeLightness : fillLightness,
+          renderMode,
+          alpha: renderMode === 1 || renderMode === 5 ? strokeAlpha : fillAlpha,
+          softMask,
+          clip,
+        },
       });
 
       textMatrix = multiply([1, 0, 0, 1, advanceText, 0], textMatrix);
@@ -773,11 +897,56 @@ export function readGlyphs(content: string, fonts: ReadonlyMap<string, FontInfo>
 
     switch (operation.operator) {
       case 'q':
-        stack.push(ctm);
+        stack.push({ ctm, fillLightness, strokeLightness, fillAlpha, strokeAlpha, softMask, clip, renderMode });
         break;
-      case 'Q':
-        ctm = stack.pop() ?? ctm;
+      case 'Q': {
+        const saved = stack.pop();
+        if (saved) {
+          ({ ctm, fillLightness, strokeLightness, fillAlpha, strokeAlpha, softMask, clip, renderMode } = saved);
+        }
         break;
+      }
+      case 'G':
+      case 'RG':
+      case 'K':
+      case 'SC':
+      case 'SCN': {
+        const lightness = lightnessOf(args);
+        if (lightness !== undefined) strokeLightness = lightness;
+        break;
+      }
+      case 'Tr':
+        renderMode = args[0] ?? renderMode;
+        break;
+      case 'gs': {
+        const name = operation.operands.find((token) => token.kind === 'name');
+        const state = name?.kind === 'name' ? options.onExtGState?.(name.value) : undefined;
+        // Opacity set inside a form combines with the opacity it was drawn at.
+        const outer = options.inherit?.alpha ?? 1;
+        if (state?.fillAlpha !== undefined) fillAlpha = state.fillAlpha * outer;
+        if (state?.strokeAlpha !== undefined) strokeAlpha = state.strokeAlpha * outer;
+        if (state?.softMask !== undefined) softMask = state.softMask || (options.inherit?.softMask ?? false);
+        break;
+      }
+      case 'W':
+      case 'W*':
+        pendingClip = true;
+        break;
+      case 'BI':
+        // An inline image fills the unit square of the current matrix.
+        options.onPaint?.(transformUnitSquare(ctm), 'image', paintInfo(false));
+        break;
+      case 'g':
+      case 'rg':
+      case 'k':
+      case 'sc':
+      case 'scn': {
+        // Only numeric components are read; a pattern name leaves the last
+        // known value, which errs towards "dark" and so towards fewer alarms.
+        const lightness = lightnessOf(args);
+        if (lightness !== undefined) fillLightness = lightness;
+        break;
+      }
       case 'cm':
         if (args.length >= 6) ctm = multiply(args.slice(0, 6) as unknown as Matrix, ctm);
         break;
@@ -860,12 +1029,165 @@ export function readGlyphs(content: string, fonts: ReadonlyMap<string, FontInfo>
         }
         break;
       }
+      case 'm':
+      case 'l':
+        pathIsRectangles = false;
+        if (args.length >= 2) path.push(point(args[0] as number, args[1] as number));
+        break;
+      case 'c':
+      case 'v':
+      case 'y':
+        pathIsRectangles = false;
+        pathHasCurves = true;
+        // Control points bound a Bézier curve, so including them gives a box
+        // that is never smaller than the curve — the safe direction here.
+        for (let i = 0; i + 1 < args.length; i += 2) path.push(point(args[i] as number, args[i + 1] as number));
+        break;
+      case 're':
+        if (args.length >= 4) {
+          const [x, y, w, h] = args as [number, number, number, number];
+          path.push(point(x, y), point(x + w, y), point(x, y + h), point(x + w, y + h));
+        }
+        break;
+      case 'S':
+      case 's':
+      case 'f':
+      case 'F':
+      case 'f*':
+      case 'B':
+      case 'B*':
+      case 'b':
+      case 'b*':
+        if (path.length > 0 && options.onPaint) {
+          const stroke = operation.operator === 'S' || operation.operator === 's';
+          options.onPaint(boxOf(path), stroke ? 'stroke' : 'fill', paintInfo(stroke));
+        }
+        endPath();
+        break;
+      case 'n':
+        endPath();
+        break;
+      case 'Do': {
+        const name = operation.operands.find((token) => token.kind === 'name');
+        if (name?.kind === 'name') {
+          options.onXObject?.(name.value, ctm, {
+            lightness: fillLightness,
+            renderMode: 0,
+            alpha: fillAlpha,
+            softMask,
+            clip,
+          });
+        }
+        break;
+      }
+      case 'sh':
+        // A shading fills the current clip. Without a clip its extent is the
+        // whole page, which is not known here, so it is reported as unknown
+        // rather than guessed.
+        options.onPaint?.(clip, 'fill', paintInfo(false));
+        break;
       default:
         break;
     }
   });
 
   return glyphs;
+}
+
+/** An axis-aligned box in page space. */
+export interface Box {
+  readonly x0: number;
+  readonly y0: number;
+  readonly x1: number;
+  readonly y1: number;
+}
+
+export interface ReadGlyphsOptions {
+  /**
+   * Transformation already in force when the stream starts, as for the
+   * content of a form XObject drawn from a page.
+   */
+  readonly ctm?: Matrix;
+  /**
+   * Paint state already in force when the stream starts, as for a form
+   * XObject drawn from inside a clipped, transparent or coloured region.
+   */
+  readonly inherit?: GlyphAppearance;
+  /**
+   * Called for each `Do`, with the XObject's resource name, the CTM, and the
+   * paint state it is drawn under.
+   */
+  readonly onXObject?: (name: string, ctm: Matrix, appearance: GlyphAppearance) => void;
+  /**
+   * Called for each painted path or inline image. The box is undefined when
+   * the painted area cannot be known, as for a shading with no clip.
+   */
+  readonly onPaint?: (box: Box | undefined, kind: 'fill' | 'stroke' | 'image', info: PaintInfo) => void;
+  /** Look up a named graphics state, for its opacity and soft mask. */
+  readonly onExtGState?: (name: string) => ExtGStateInfo | undefined;
+}
+
+/** How a path or image was painted. */
+export interface PaintInfo {
+  /** Lightness of the paint: 0 black, 1 white. */
+  readonly lightness: number;
+  readonly alpha: number;
+  readonly softMask: boolean;
+  /** True when the path was built only from rectangles. */
+  readonly rectangles: boolean;
+  readonly clip: Box | undefined;
+}
+
+/** Whether straight-line points trace an upright rectangle. */
+function isAxisAlignedBox(points: readonly (readonly [number, number])[]): boolean {
+  if (points.length < 4 || points.length > 5) return false;
+  const box = boxOf(points);
+  const near = (a: number, b: number): boolean => Math.abs(a - b) < 0.01;
+  return points.every(
+    ([x, y]) => (near(x, box.x0) || near(x, box.x1)) && (near(y, box.y0) || near(y, box.y1)),
+  );
+}
+
+function intersectBoxes(a: Box | undefined, b: Box): Box {
+  if (a === undefined) return b;
+  const x0 = Math.max(a.x0, b.x0);
+  const y0 = Math.max(a.y0, b.y0);
+  // An empty intersection stays empty rather than turning inside out.
+  return { x0, y0, x1: Math.max(x0, Math.min(a.x1, b.x1)), y1: Math.max(y0, Math.min(a.y1, b.y1)) };
+}
+
+function transformUnitSquare(m: Matrix): Box {
+  const xs = [m[4], m[0] + m[4], m[2] + m[4], m[0] + m[2] + m[4]];
+  const ys = [m[5], m[1] + m[5], m[3] + m[5], m[1] + m[3] + m[5]];
+  return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
+}
+
+/** Perceived lightness of a colour given as 1 (grey), 3 (RGB) or 4 (CMYK) components. */
+function lightnessOf(components: readonly number[]): number | undefined {
+  if (components.length === 1) return components[0];
+  if (components.length === 3) {
+    const [r, g, b] = components as [number, number, number];
+    return 0.299 * r + 0.587 * g + 0.114 * b;
+  }
+  if (components.length === 4) {
+    const [c, m, y, k] = components as [number, number, number, number];
+    return 0.299 * (1 - c) * (1 - k) + 0.587 * (1 - m) * (1 - k) + 0.114 * (1 - y) * (1 - k);
+  }
+  return undefined;
+}
+
+function boxOf(points: readonly (readonly [number, number])[]): Box {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const [x, y] of points) {
+    x0 = Math.min(x0, x);
+    y0 = Math.min(y0, y);
+    x1 = Math.max(x1, x);
+    y1 = Math.max(y1, y);
+  }
+  return { x0, y0, x1, y1 };
 }
 
 // --- rewriting -----------------------------------------------------------

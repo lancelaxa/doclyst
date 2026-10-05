@@ -1,5 +1,12 @@
 import { DoclystError, safeErrorSummary } from '../errors.js';
-import { fillPreparedDocx, prepareDocx, readDocxFields, type DocxFillOptions, type PreparedDocx } from '../docx/fill.js';
+import {
+  fillPreparedDocx,
+  prepareDocx,
+  readDocxFields,
+  readLinkedContent,
+  type DocxFillOptions,
+  type PreparedDocx,
+} from '../docx/fill.js';
 import { extractDocumentModel } from '../docx/model.js';
 import { replacePlaceholdersInXml } from '../docx/wordxml.js';
 import { renderModelToPdf, type PdfRenderOptions } from '../pdf/render.js';
@@ -12,8 +19,16 @@ import {
   checkFilenameFields,
   checkFilenameTemplate,
   dedupeFilename,
+  sanitizeFilename,
   type FilenameWarning,
 } from './filename.js';
+import {
+  checkEmailAddress,
+  composeEmailDraft,
+  contentTypeFor,
+  fillText,
+  type EmailDraftOptions,
+} from '../output/email.js';
 
 /** Template formats Doclyst can fill. */
 export type TemplateKind = 'docx' | 'pdf';
@@ -74,6 +89,21 @@ export interface BatchOptions {
    * whole batch, and yielding here lets it paint between records.
    */
   readonly onProgress?: (completed: number, total: number) => void | Promise<void>;
+  /**
+   * Also write an email draft for each document, addressed from a column and
+   * with the document attached. Nothing is sent: see `output/email.ts`.
+   *
+   * A row whose address is blank or invalid fails as a whole, document
+   * included. A letter with no way to reach its recipient is not finished,
+   * and producing it anyway would leave someone to notice the gap by hand.
+   */
+  readonly email?: EmailDraftOptions;
+}
+
+/** An `.eml` draft that goes with one generated document. */
+export interface GeneratedEmail {
+  readonly filename: string;
+  readonly bytes: Uint8Array;
 }
 
 /** One successfully generated document. */
@@ -82,6 +112,8 @@ export interface GeneratedDocument {
   readonly row: number;
   readonly filename: string;
   readonly bytes: Uint8Array;
+  /** Present when the batch was asked for email drafts. */
+  readonly email?: GeneratedEmail;
 }
 
 /** A record that could not be rendered. Carries no personal data. */
@@ -103,6 +135,11 @@ export interface BatchResult {
    */
   readonly unsupported: readonly string[];
   /**
+   * Things a DOCX template loads from outside itself when a generated
+   * document is opened, such as a linked picture. Empty for PDF output.
+   */
+  readonly linkedContent: readonly string[];
+  /**
    * PDF form fields whose text had to be shrunk to fit the box the template
    * gives them. Field names only, never values.
    */
@@ -110,6 +147,12 @@ export interface BatchResult {
   /** Template fields with no matching column, as normalized keys. */
   readonly unmatchedFields: readonly string[];
   readonly warnings: readonly FilenameWarning[];
+  /**
+   * Groups of rows that share one email address, by row number. Usually a
+   * copy-paste slip, and the kind that sends one person's letter to another.
+   * Empty unless email drafts were requested.
+   */
+  readonly sharedAddresses: readonly (readonly number[])[];
 }
 
 /** One event from a streaming batch. */
@@ -127,6 +170,11 @@ export interface BatchSummary {
    */
   readonly unsupported: readonly string[];
   /**
+   * Things a DOCX template loads from outside itself when a generated
+   * document is opened, such as a linked picture. Empty for PDF output.
+   */
+  readonly linkedContent: readonly string[];
+  /**
    * PDF form fields whose text had to be shrunk to fit the box the template
    * gives them. Field names only, never values.
    */
@@ -134,6 +182,12 @@ export interface BatchSummary {
   /** Template fields with no matching column, as normalized keys. */
   readonly unmatchedFields: readonly string[];
   readonly warnings: readonly FilenameWarning[];
+  /**
+   * Groups of rows that share one email address, by row number. Usually a
+   * copy-paste slip, and the kind that sends one person's letter to another.
+   * Empty unless email drafts were requested.
+   */
+  readonly sharedAddresses: readonly (readonly number[])[];
 }
 
 /**
@@ -159,6 +213,8 @@ export async function* streamBatch(
   const shrunk = new Set<string>();
   let generated = 0;
   let failed = 0;
+  /** Lower-cased address to the rows using it, for the shared-address check. */
+  const addresses = new Map<string, number[]>();
 
   // Both filename checks need saying before a run, not after: one is about
   // disclosure, the other about getting the names you actually asked for.
@@ -184,6 +240,7 @@ export async function* streamBatch(
   // cannot represent are the same for every record, so they are found once.
   const bodyXml = prepared?.textParts.get('word/document.xml');
   const unsupported = prepared && format === 'pdf' ? unsupportedForPdf(prepared) : [];
+  const linkedContent = template.kind === 'docx' && format === 'docx' ? readLinkedContent(template.bytes) : [];
 
   for (let i = 0; i < records.length; i += 1) {
     const row = i + 1;
@@ -196,6 +253,16 @@ export async function* streamBatch(
         row,
       });
       const resolve = (key: string, original: string): string => resolver.resolve(key, original);
+
+      // The address is checked before anything is rendered, so a row that
+      // cannot be sent fails cheaply and the letter is never produced.
+      let address: string | undefined;
+      if (options.email) {
+        address = recipientAddress(record, options.email.to, row);
+        const rows = addresses.get(address.toLowerCase()) ?? [];
+        rows.push(row);
+        addresses.set(address.toLowerCase(), rows);
+      }
 
       let bytes: Uint8Array;
       if (prepared !== undefined && format === 'pdf') {
@@ -228,8 +295,26 @@ export async function* streamBatch(
         takenNames,
       );
 
+      let email: GeneratedEmail | undefined;
+      if (options.email && address !== undefined) {
+        const stem = filename.slice(0, filename.length - extension.length);
+        const attachmentStem = options.email.attachmentName?.trim()
+          ? fillText(options.email.attachmentName, resolve)
+          : stem;
+        const attachmentName = sanitizeFilename(attachmentStem, extension);
+        email = {
+          filename: `${stem}.eml`,
+          bytes: composeEmailDraft({
+            to: address,
+            subject: fillText(options.email.subject, resolve),
+            body: fillText(options.email.body, resolve),
+            attachment: { filename: attachmentName, bytes, contentType: contentTypeFor(attachmentName) },
+          }),
+        };
+      }
+
       generated += 1;
-      yield { type: 'document', document: { row, filename, bytes } };
+      yield { type: 'document', document: email ? { row, filename, bytes, email } : { row, filename, bytes } };
     } catch (error) {
       failed += 1;
       yield { type: 'failure', failure: toFailure(row, error) };
@@ -243,10 +328,42 @@ export async function* streamBatch(
     generated,
     failed,
     unsupported,
+    linkedContent,
     shrunkFields: [...shrunk],
     unmatchedFields: [...unmatched].map(normalizeKey),
     warnings,
+    sharedAddresses: [...addresses.values()].filter((rows) => rows.length > 1),
   };
+}
+
+/**
+ * Read and check one row's email address.
+ *
+ * Looked up the way a placeholder is, so a column called "Email" is found from
+ * "EMAIL". A blank or missing address fails the row whatever the
+ * missing-values setting says: "leave it blank" is a reasonable choice for a
+ * middle name and a meaningless one for where the letter goes.
+ */
+function recipientAddress(record: DataRecord, column: string, row: number): string {
+  const resolver = new ValueResolver(record, { missing: 'error', row });
+  let value: string;
+  try {
+    value = resolver.resolve(column, '');
+  } catch {
+    throw new DoclystError('MISSING_VALUE', `No email address in column "${column}" in row ${row}.`, {
+      row,
+      field: column,
+    });
+  }
+  const checked = checkEmailAddress(value);
+  if (!checked.ok) {
+    throw new DoclystError(
+      'INVALID_DATA',
+      `The email address in column "${column}" in row ${row} ${checked.reason}.`,
+      { row, field: column },
+    );
+  }
+  return checked.address;
 }
 
 /**
@@ -276,9 +393,11 @@ export async function runBatch(
     documents,
     failures,
     unsupported: next.value.unsupported,
+    linkedContent: next.value.linkedContent,
     shrunkFields: next.value.shrunkFields,
     unmatchedFields: next.value.unmatchedFields,
     warnings: next.value.warnings,
+    sharedAddresses: next.value.sharedAddresses,
   };
 }
 
@@ -311,6 +430,15 @@ function unsupportedForPdf(prepared: PreparedDocx): readonly string[] {
   }
 
   return [...found];
+}
+
+/**
+ * What a template loads from outside itself when a generated document is
+ * opened. Empty for a PDF template, and irrelevant for PDF output, which does
+ * not carry pictures or objects over.
+ */
+export function readLinkedContentWarnings(template: Template): readonly string[] {
+  return template.kind === 'docx' ? readLinkedContent(template.bytes) : [];
 }
 
 /** Convert a thrown value into a failure record that carries no personal data. */

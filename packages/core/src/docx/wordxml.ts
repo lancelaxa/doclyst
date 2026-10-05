@@ -1,5 +1,5 @@
 import { findPlaceholders } from '../template/placeholder.js';
-import { decodeXmlText, encodeXmlText } from './xml.js';
+import { decodeXmlText, encodeXmlText, scanElements } from './xml.js';
 
 /**
  * Placeholder substitution inside WordprocessingML.
@@ -17,9 +17,6 @@ import { decodeXmlText, encodeXmlText } from './xml.js';
  * nodes — the whole replacement landing in the first node of the match so the
  * substituted text inherits that run's formatting.
  */
-
-/** Matches a `<w:t>` element, self-closing or not, capturing attrs and body. */
-const TEXT_NODE_RE = /<w:t\b([^>]*?)(?:\/>|>([\s\S]*?)<\/w:t>)/g;
 
 interface TextNode {
   /** Offset of `<` in the source XML. */
@@ -63,14 +60,12 @@ export function replacePlaceholdersInXml(xml: string, resolve: PlaceholderResolv
 /** Collect every `<w:t>` element in document order with its decoded text. */
 function collectTextNodes(xml: string): TextNode[] {
   const nodes: TextNode[] = [];
-  TEXT_NODE_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = TEXT_NODE_RE.exec(xml)) !== null) {
+  for (const element of scanElements(xml, 'w:t')) {
     nodes.push({
-      start: match.index,
-      end: match.index + match[0].length,
-      attrs: match[1] ?? '',
-      text: decodeXmlText(match[2] ?? ''),
+      start: element.start,
+      end: element.end,
+      attrs: element.attrs,
+      text: decodeXmlText(element.body ?? ''),
     });
   }
   return nodes;
@@ -168,12 +163,17 @@ function applyReplacement(
 
 /** Splice the (possibly rewritten) node texts back into the source XML. */
 function rebuild(xml: string, nodes: readonly TextNode[]): string {
-  let out = xml;
-  for (let i = nodes.length - 1; i >= 0; i -= 1) {
-    const node = nodes[i]!;
-    out = out.slice(0, node.start) + renderTextNode(node) + out.slice(node.end);
+  // Assembled from pieces in one pass. Splicing each node into the whole
+  // string in turn copied the document once per node, which on a long
+  // template is quadratic.
+  const pieces: string[] = [];
+  let cursor = 0;
+  for (const node of nodes) {
+    pieces.push(xml.slice(cursor, node.start), renderTextNode(node));
+    cursor = node.end;
   }
-  return out;
+  pieces.push(xml.slice(cursor));
+  return pieces.join('');
 }
 
 /**

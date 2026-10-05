@@ -208,3 +208,13 @@ describe('coerceToText', () => {
     expect(() => coerceToText('x'.repeat(100_001), 'NOTES')).toThrow(/limit/);
   });
 });
+
+describe('column names that are also object properties', () => {
+  it('keeps a column called __proto__ like any other', () => {
+    const { fields, records } = readCsvRecords('__proto__,constructor,NAME\nfirst,second,Aisha\n');
+    expect(fields).toEqual(['__proto__', 'constructor', 'NAME']);
+    expect(Object.keys(records[0]!)).toEqual(['__proto__', 'constructor', 'NAME']);
+    expect(records[0]!['__proto__']).toBe('first');
+    expect(new ValueResolver(records[0]!).resolve('__proto__', '')).toBe('first');
+  });
+});

@@ -9,10 +9,12 @@ import {
   PDFDict,
   PDFName,
   PDFRef,
+  PDFStream,
   type PDFFont,
 } from 'pdf-lib';
 import { DoclystError, safeErrorSummary } from '../errors.js';
 import { readFontFromDict, type FontInfo } from './content.js';
+import { InflateLimitError, preflightOnce } from './limits.js';
 import type { PlaceholderResolver } from '../docx/wordxml.js';
 
 /**
@@ -104,6 +106,13 @@ async function loadPdf(template: Uint8Array): Promise<PDFDocument> {
   }
 
   try {
+    preflightOnce(template, MAX_PDF_TEMPLATE_INFLATED_BYTES);
+  } catch (error) {
+    if (!(error instanceof InflateLimitError)) throw error;
+    throw new DoclystError('LIMIT_EXCEEDED', 'The PDF template expands to more than the supported size limit.');
+  }
+
+  try {
     // `ignoreEncryption` stays false: an encrypted template would otherwise be
     // filled and saved *without* its protection, quietly downgrading a control
     // the template owner deliberately applied.
@@ -116,6 +125,12 @@ async function loadPdf(template: Uint8Array): Promise<PDFDocument> {
     );
   }
 }
+
+/**
+ * Most a PDF template may decompress to, matching the DOCX template limit.
+ * A letterhead with images comes nowhere near it.
+ */
+export const MAX_PDF_TEMPLATE_INFLATED_BYTES = 200 * 1024 * 1024;
 
 /** List the fillable field names of a PDF template, as placeholder keys. */
 export async function readPdfFields(template: Uint8Array): Promise<string[]> {
@@ -194,6 +209,7 @@ export async function fillPdf(
   if (options.scrubMetadata ?? true) {
     scrubPdfMetadata(doc);
   }
+  removeActiveContent(doc);
 
   // Fields pointing at a font adopted from the page are drawn here, because
   // pdf-lib generates appearances with its own font and would silently swap the
@@ -218,6 +234,7 @@ export async function fillPdf(
   // Flattening already rasterises each field's appearance stream, so asking
   // for a second pass would be wasted work. When the caller keeps the fields
   // interactive, appearances must be regenerated or viewers show empty boxes.
+  dropUnreachableObjects(doc);
   const bytes = await doc.save({ updateFieldAppearances: !flatten && adopted === 0 });
   return { bytes, replaced, shrunkFields };
 }
@@ -817,4 +834,143 @@ function scrubPdfMetadata(doc: PDFDocument): void {
   doc.setCreator('');
   doc.setCreationDate(epoch);
   doc.setModificationDate(epoch);
+
+  // The fields above are only the standard ones. Producers add their own —
+  // Company, SourceModified — and every one of them would otherwise travel.
+  const info = doc.context.lookup(doc.context.trailerInfo.Info);
+  if (info instanceof PDFDict) {
+    for (const key of info.keys()) {
+      if (!STANDARD_INFO_KEYS.has(key.asString())) info.delete(key);
+    }
+  }
+
+  // XMP metadata repeats the author, the tool and the timestamps in a second
+  // place that the Info dictionary setters never touch. Word writes it on
+  // every "Save as PDF". Application-private data goes for the same reason.
+  doc.catalog.delete(PDFName.of('Metadata'));
+  doc.catalog.delete(PDFName.of('PieceInfo'));
+
+  for (const page of doc.getPages()) {
+    page.node.delete(PDFName.of('Metadata'));
+    page.node.delete(PDFName.of('PieceInfo'));
+
+    const annotations = page.node.lookup(PDFName.of('Annots'));
+    if (!(annotations instanceof PDFArray)) continue;
+    const kept = PDFArray.withContext(doc.context);
+    for (const entry of annotations.asArray()) {
+      const annotation = entry instanceof PDFRef ? doc.context.lookup(entry) : entry;
+      if (!(annotation instanceof PDFDict)) {
+        kept.push(entry);
+        continue;
+      }
+      // Sticky notes and their pop-ups are review comments: someone's note to
+      // a colleague, which every recipient would otherwise be able to open.
+      const subtype = annotation.lookup(PDFName.of('Subtype'));
+      if (subtype === PDFName.of('Text') || subtype === PDFName.of('Popup')) continue;
+      // Anything else that stays loses who made it and when.
+      for (const key of ['T', 'M', 'CreationDate', 'NM']) annotation.delete(PDFName.of(key));
+      annotation.delete(PDFName.of('Popup'));
+      kept.push(entry);
+    }
+    if (kept.size() === 0) page.node.delete(PDFName.of('Annots'));
+    else page.node.set(PDFName.of('Annots'), kept);
+  }
+}
+
+/**
+ * Delete every object nothing in the document points to any more.
+ *
+ * Removing a reference does not remove the object: pdf-lib writes every
+ * object it holds. So the XMP block, the sticky notes and the replaced
+ * appearance streams scrubbed above would all still be in the file —
+ * invisible to a reader, and legible to anything that looks inside it, which
+ * is exactly how an author's name was found surviving the scrub in testing.
+ */
+function dropUnreachableObjects(doc: PDFDocument): void {
+  const { context } = doc;
+  const reachable = new Set<string>();
+  const pending: unknown[] = [context.trailerInfo.Root, context.trailerInfo.Info];
+
+  while (pending.length > 0) {
+    const item = pending.pop();
+    if (item instanceof PDFRef) {
+      if (reachable.has(item.tag)) continue;
+      reachable.add(item.tag);
+      pending.push(context.lookup(item));
+    } else if (item instanceof PDFDict) {
+      for (const [, value] of item.entries()) pending.push(value);
+    } else if (item instanceof PDFArray) {
+      pending.push(...item.asArray());
+    } else if (item instanceof PDFStream) {
+      pending.push(item.dict);
+    }
+  }
+
+  for (const [ref] of context.enumerateIndirectObjects()) {
+    if (!reachable.has(ref.tag)) context.delete(ref);
+  }
+}
+
+const STANDARD_INFO_KEYS = new Set([
+  '/Title',
+  '/Author',
+  '/Subject',
+  '/Keywords',
+  '/Creator',
+  '/Producer',
+  '/CreationDate',
+  '/ModDate',
+  '/Trapped',
+]);
+
+/**
+ * Remove anything in the template that runs or carries files.
+ *
+ * A letter has no use for scripts, open actions or attachments, and a template
+ * that has them — added by a plug-in, or by someone with worse intentions —
+ * would hand them to every person the letter is sent to. Done whatever the
+ * metadata setting, because it is not metadata.
+ */
+function removeActiveContent(doc: PDFDocument): void {
+  doc.catalog.delete(PDFName.of('OpenAction'));
+  doc.catalog.delete(PDFName.of('AA'));
+  const names = doc.catalog.lookup(PDFName.of('Names'));
+  if (names instanceof PDFDict) {
+    names.delete(PDFName.of('JavaScript'));
+    names.delete(PDFName.of('EmbeddedFiles'));
+  }
+  for (const page of doc.getPages()) {
+    page.node.delete(PDFName.of('AA'));
+
+    // A link or a form field can carry a script or a "launch this file"
+    // action of its own, and a file-attachment annotation is an attached file
+    // by another route. Links that go to a web address or to a place in the
+    // document are kept; everything else they might do is not.
+    const annotations = page.node.lookup(PDFName.of('Annots'));
+    if (!(annotations instanceof PDFArray)) continue;
+    const kept = PDFArray.withContext(doc.context);
+    for (const entry of annotations.asArray()) {
+      const annotation = entry instanceof PDFRef ? doc.context.lookup(entry) : entry;
+      if (annotation instanceof PDFDict) {
+        if (annotation.lookup(PDFName.of('Subtype')) === PDFName.of('FileAttachment')) continue;
+        annotation.delete(PDFName.of('AA'));
+        const action = annotation.lookup(PDFName.of('A'));
+        const kind = action instanceof PDFDict ? action.lookup(PDFName.of('S')) : undefined;
+        if (action !== undefined && kind !== PDFName.of('URI') && kind !== PDFName.of('GoTo')) {
+          annotation.delete(PDFName.of('A'));
+        }
+        if (action instanceof PDFDict) action.delete(PDFName.of('Next'));
+      }
+      kept.push(entry);
+    }
+    if (kept.size() === 0) page.node.delete(PDFName.of('Annots'));
+    else page.node.set(PDFName.of('Annots'), kept);
+  }
+
+  // Interactive fields, when they are kept rather than flattened, can run
+  // scripts on focus, on change and on calculation.
+  const acroForm = doc.catalog.lookup(PDFName.of('AcroForm'));
+  if (acroForm instanceof PDFDict) {
+    for (const field of doc.getForm().getFields()) field.acroField.dict.delete(PDFName.of('AA'));
+  }
 }

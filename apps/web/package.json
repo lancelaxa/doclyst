@@ -11,7 +11,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@doclyst/core": "0.1.0"
+    "@doclyst/core": "0.1.0",
+    "pdfjs-dist": "6.4.299"
   },
   "devDependencies": {
     "vite": "^7.1.5"

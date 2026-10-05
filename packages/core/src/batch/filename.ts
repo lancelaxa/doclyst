@@ -37,6 +37,10 @@ const MAX_FILENAME_LENGTH = 120;
  */
 export function sanitizeFilename(input: string, extension: string): string {
   let name = stripControlCharacters(input)
+    // Bidirectional controls make a name display differently from what it
+    // is: "Offer\u202Efdp.exe" shows as "Offerexe.pdf". There is no reason
+    // for one to be in a filename or an attachment name.
+    .replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '')
     // Path separators and Windows-illegal characters become a single
     // underscore. Substituting rather than dropping keeps the parts of a
     // multi-word value distinguishable ("A/B Ltd" stays "A_B Ltd").
@@ -180,7 +184,9 @@ export function buildFilename(
 }
 
 function lookup(record: Readonly<Record<string, unknown>>, key: string): unknown {
-  if (key in record) return record[key];
+  // Own properties only: `in` would also find `constructor` and `toString`,
+  // and name a file after the source code of Object.
+  if (Object.hasOwn(record, key)) return record[key];
   const normalized = key.trim().replace(/[\s.\-]+/g, '_').toUpperCase();
   for (const [candidate, value] of Object.entries(record)) {
     if (candidate.trim().replace(/[\s.\-]+/g, '_').toUpperCase() === normalized) return value;

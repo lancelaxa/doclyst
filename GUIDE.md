@@ -8,6 +8,8 @@ generate one document per person. Nothing to install, and no programming.
 - [Step 1 — Your template](#step-1--your-template)
 - [Step 2 — Your spreadsheet](#step-2--your-spreadsheet)
 - [Step 3 — Generate the documents](#step-3--generate-the-documents)
+- [Step 4 — Send the letters for signing](#step-4--send-the-letters-for-signing)
+- [Step 5 — Check the signed copies](#step-5--check-the-signed-copies)
 - [Working with PDF templates](#working-with-pdf-templates)
 - [Getting PDFs from a Word template](#getting-pdfs-from-a-word-template)
 - [Naming the output files](#naming-the-output-files)
@@ -30,12 +32,14 @@ This is the simplest, and the most private: there is no server involved at any
 point, and it works with no internet connection at all.
 
 1. Go to the repository on GitHub and open the **Actions** tab.
-2. Click the most recent **“Build and publish the app”** run.
+2. Click the most recent **“Build and publish the app”** run on the **main**
+   branch. Runs on other branches are tests of unfinished work and have no
+   download.
 3. Scroll to **Artifacts** and download **`doclyst-single-file`**.
 4. Unzip it. You get one file: **`doclyst.html`**.
 5. **Double-click it.** It opens in your browser and is ready to use.
 
-That single file *is* the whole application — about 480 KB, with everything
+That single file *is* the whole application — about 2.2 MB, with everything
 built in. Keep it on your desktop, email it to a colleague, or put it on a USB
 stick. It never needs updating to keep working, and it works offline.
 
@@ -129,6 +133,14 @@ Rules worth knowing:
 - Word often splits a placeholder invisibly across its internal formatting.
   Doclyst handles that, so `{{NAME}}` works even when Word has mangled it
   behind the scenes.
+- **Tracked changes and comments do not travel.** Each letter goes out as you
+  see the template with markup hidden: changes accepted, comments and hidden
+  text removed. Someone receiving the letter cannot open the review pane and
+  read what was struck out.
+- **Insert pictures normally, not with "Link to File".** A linked picture is
+  fetched from its original location each time a letter is opened, which tells
+  whoever runs that location who opened it, and shows as a broken picture for
+  anyone outside your network. Doclyst warns you if the template has one.
 
 > **Tip:** type the placeholder in one go. If you paste or edit it in pieces,
 > Word sometimes autocorrects the braces into “smart quotes”, which stops it
@@ -232,6 +244,120 @@ Always open one or two generated documents before sending anything. The most
 common mistakes — a column mapped to the wrong placeholder, a date in an
 unexpected format, a missing currency symbol — are obvious on sight and
 invisible in a summary.
+
+---
+
+## Step 4 — Send the letters for signing
+
+Doclyst can write an email for every letter: addressed to that person, with a
+subject and message, and with their letter already attached. **It does not send
+anything.** Each email is a file you open in Outlook, check, and send yourself.
+
+What this saves is attaching a hundred letters by hand — and the risk that
+comes with it, of attaching one person's letter to another person's email.
+Each letter and its email come from the same row, so they cannot be mixed up.
+
+### What you need
+
+- **A column of email addresses** in your spreadsheet, one address per cell.
+- **PDF output.** Signing happens in Adobe Acrobat Reader, which works on PDFs.
+  Use a PDF template, or set **Output format** to *PDF*.
+
+### Making the emails
+
+1. Load the template and spreadsheet as usual.
+2. Under **Options**, tick **Also make an email for each document**.
+3. Check **Email column**. Doclyst picks the column with "email" in its name;
+   change it if it guessed wrong.
+4. Read the line underneath. Green — *“All 100 addresses look right”* — means
+   you are ready. Otherwise it names the rows to fix:
+   - **The address is blank, or is not one valid email address** — the cell is
+     empty, has two addresses in it, or has a name or a line break pasted in
+     with the address. That row will fail until the cell is fixed.
+   - **Rows 4 and 19 have the same email address** — usually a copy-and-paste
+     slip, and the kind that sends one person's letter to someone else.
+5. Change the **Subject**, **Attachment name** and **Message** if you want to.
+   `{{FIELD}}` works in all three, just as in the template. The attachment name
+   is what the recipient sees — "Offer letter.pdf" rather than
+   "document-0042.pdf".
+6. Press **Generate documents**. Each letter gets an email file beside it:
+   `document-0001.pdf` and `document-0001.eml`.
+
+The ready-made message tells the recipient how to sign: open the letter in
+Adobe Acrobat Reader (free, on a computer or a phone), choose **Fill & Sign**,
+sign, save, and reply with the signed copy attached.
+
+### Sending
+
+**Double-click an `.eml` file.** It opens in Outlook as a new email, addressed
+and with the letter attached. Check the name and the attachment, then press
+**Send**. Repeat for each one.
+
+**Before the first real batch, send one to yourself.** Put your own address in
+one row, generate, and open that email. You should see a normal new message with
+a **Send** button. This matters because email programs differ:
+
+| Email program | Opens these as ready-to-send emails? |
+|---|---|
+| Outlook on Windows (the classic desktop app), Apple Mail | Yes — these are the programs the format is designed for |
+| The "new Outlook" for Windows, Outlook for Mac, Thunderbird | Test it first — some open the file read-only |
+| Outlook in a web browser, Gmail | No — they cannot open an email file from your computer |
+
+If yours does not work, the letters are still there to attach by hand.
+
+**Keep the letters you sent.** The next step needs them.
+
+---
+
+## Step 5 — Check the signed copies
+
+A signed letter that comes back may not say what you sent. Software can alter
+it, and so can a person — a salary typed over, a clause covered with a white
+box, a page left out. Comparing a hundred letters by eye, those are easy to
+miss. Doclyst compares them for you.
+
+1. Save the signed copies from the replies into one folder.
+2. In Doclyst, go to **5 · Check signed letters**.
+3. Drop **the letters you sent** — the PDFs from Step 4 — into the left box.
+4. Drop **the signed copies** into the right box.
+5. Press **Check signed letters**.
+
+Each signed copy is matched to the letter it came from **by what it says**, so
+it does not matter if the recipient renamed the file. Letters that need
+attention are listed first.
+
+| Result | What it means | What to do |
+|---|---|---|
+| **Signed, nothing changed** | Everything in the letter you sent is still there, in the same place, and something has been added — the signature | File it |
+| **Not signed** | Nothing has been added | Ask them to sign it |
+| **Check by eye** | Nothing is missing, but something added sits over the original text, or two files match the same letter | Open it and look at the place named — usually a signature running into the printed name |
+| **Changed — do not accept as it is** | Something you sent is missing, moved or different, text has been covered over, or a page has been added or taken away | Do not accept it. Send the letter again |
+| **Cannot be checked** | A scan or photo of a printed letter, a password-protected file, or a file far larger or more complicated than a letter should be | Compare it with the original by eye, or ask for the PDF itself |
+| **No matching letter** | It is not one of the letters you dropped in on the left | Check you added the right letters, or that it is the right file |
+
+Underneath is a count of **letters not back yet**, which doubles as your list
+of who to chase.
+
+Results name **where** something changed — *"Page 1, near the top"* — never
+what the text says. Open the letter to see it.
+
+### What the check does not do
+
+- **It does not prove who signed.** A drawn signature shows someone signed; it
+  does not prove who. Electronic signatures are generally accepted for
+  employment contracts in Singapore, but confirm with whoever advises you on
+  legal matters. This is not legal advice.
+- **It cannot read a scan or a photo**, because there is no text in it to
+  compare. Those are flagged, never passed.
+- **It looks at the page, not only the file.** Besides reading what the PDF
+  contains, it draws each page and compares it with the letter you sent, so a
+  copy rigged to *show* something different from what it *says* is caught
+  too. Still, the letter you sent is the record of what was offered: keep it.
+- **Always read what was added.** A copy marked *signed* lists every addition
+  and where it is. A typed date beside the date line is normal; a typed
+  sentence somewhere else is worth a look.
+- **It does not chase, remind or track.** It checks what you give it, when you
+  give it.
 
 ---
 
@@ -509,6 +635,10 @@ documented in [DEVELOPING.md](DEVELOPING.md) — nothing in this guide needs it.
 | **This template uses tables, images, … which cannot be carried into a re-typeset PDF** | PDF output re-lays the text and cannot reproduce those | Move the content into ordinary paragraphs, or keep DOCX output |
 | **Refusing to overwrite an existing file** | Output already exists | Use a new folder, or add `--force` |
 | **A ZIP this large may fail to save** | The batch is too big for an in-memory download | Use *Save to folder* / *Save as ZIP*, or the command line |
+| **The email address in column "Email" in row 7 is blank** (or *contains more than one address*, *contains a line break*, *is not a valid email address*) | That cell cannot be used to address an email | Put exactly one address in the cell, with nothing else |
+| **No email address in column "Email"** | The column chosen for addresses does not exist | Choose the right column under *Email column* |
+| **This template contains a picture linked rather than embedded** | A picture was inserted with "Link to File" | In the template, delete it and insert it again with Insert → Pictures → This Device |
+| **Double-clicking an .eml file opens it read-only, with no Send button** | Your email program does not support ready-to-send email files | Use desktop Outlook, or attach the letters by hand |
 
 Error messages deliberately name the **row and the field** but never the value,
 so they are safe to screenshot or paste into a support ticket.
@@ -537,6 +667,8 @@ The rest is down to how you use it. A short checklist:
 - **Mind where you save.** A synced or backed-up folder copies those documents
   somewhere else, often somewhere with different access rules.
 - **Send them carefully.** How you distribute the documents is usually the
-  riskiest step, and it is entirely outside this tool.
+  riskiest step. Doclyst's emails fix the pairing of letter to person, but you
+  still press Send: glance at the name and the attachment each time, send from
+  your work account, and never copy anyone else in.
 - **Keep the source spreadsheet somewhere sensible.** It holds everyone's data
   in one file, and its permissions are yours to manage.

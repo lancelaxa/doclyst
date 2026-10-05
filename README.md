@@ -5,6 +5,8 @@ at a time, entirely on your own device.
 
 ```
 Template + spreadsheet  →  one document per row  →  a folder or a ZIP
+                                                 →  an email for each, ready to send
+Signed copies back      →  checked against what you sent
 ```
 
 Built for documents that carry personal data: offer letters, payslips,
@@ -54,6 +56,13 @@ keeps working if the link above ever goes away.
   field is too small for the longest value in your data — before a single
   document is written.
 - **Hundreds at a time.** Save straight to a folder or a ZIP; memory stays flat.
+- **An email for every letter.** Addressed, with the letter attached, ready to
+  open in Outlook and send. Doclyst never sends anything itself, and it checks
+  every address first — including for the pasted-in line break that would
+  quietly copy someone else in.
+- **Checks signed copies.** Drop in the letters you sent and the signed copies
+  that came back. It matches them up, even if renamed, and tells you which are
+  signed, which are not, and which say something different from what you sent.
 
 ## Anything it cannot do, it says so
 

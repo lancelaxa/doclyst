@@ -224,6 +224,50 @@
               <span>Flatten PDF fields, so values cannot be edited back out</span>
             </label>
           </div>
+
+          <div class="email-options">
+            <label class="check">
+              <input type="checkbox" id="make-emails" />
+              <span>
+                Also make an email for each document, ready to send from Outlook
+              </span>
+            </label>
+
+            <div id="email-fields" hidden>
+              <p class="hint indent">
+                Nothing is sent from here. You get one email file per document,
+                already addressed and with the document attached. Open each one and
+                press Send.
+              </p>
+              <div class="field-row">
+                <label for="email-column">Email column</label>
+                <select id="email-column"></select>
+              </div>
+              <div id="email-check" class="warnings" role="status" aria-live="polite"></div>
+              <div class="field-row">
+                <label for="email-subject">Subject</label>
+                <input type="text" id="email-subject" value="Your offer letter" autocomplete="off" />
+              </div>
+              <div class="field-row">
+                <label for="attachment-name">Attachment name</label>
+                <input type="text" id="attachment-name" value="Offer letter" autocomplete="off" />
+              </div>
+              <div class="field-row field-row-top">
+                <label for="email-body">Message</label>
+                <textarea id="email-body" rows="9" spellcheck="true">Hello,
+
+Please find your letter attached.
+
+To accept, open it in Adobe Acrobat Reader (free on computer and phone), choose Fill &amp; Sign, and sign it. Then save it and reply to this email with the signed copy attached.
+
+Thank you.</textarea>
+              </div>
+              <p class="hint indent">
+                <code>{{FIELD}}</code> works in the subject, attachment name and
+                message, as in the template.
+              </p>
+            </div>
+          </div>
         </section>
 
         <section class="card card-accent" aria-labelledby="step-generate">
@@ -259,6 +303,54 @@
           </div>
 
           <div id="results" class="results" role="status" aria-live="polite"></div>
+        </section>
+
+        <section class="card" aria-labelledby="step-check">
+          <header class="card-head">
+            <span class="step-num" aria-hidden="true">5</span>
+            <div>
+              <h2 id="step-check">Check signed letters</h2>
+              <p class="hint">
+                When signed copies come back, check that nothing in them was changed.
+                Files are matched by what they say, so renamed files are fine.
+              </p>
+            </div>
+          </header>
+
+          <div class="drop-pair">
+            <label class="dropzone" id="sent-drop" for="sent-input">
+              <svg class="dz-icon" viewBox="0 0 24 24" width="26" height="26" fill="none"
+                   stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                   stroke-linejoin="round" aria-hidden="true">
+                <path d="M14 3v5h5" />
+                <path d="M19 8v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7z" />
+              </svg>
+              <span class="dz-text"><strong>Letters you sent</strong></span>
+              <span class="dz-meta">PDFs from step 4 — choose or drop them all</span>
+              <input type="file" id="sent-input" accept=".pdf" multiple class="visually-hidden" />
+            </label>
+
+            <label class="dropzone" id="returned-drop" for="returned-input">
+              <svg class="dz-icon" viewBox="0 0 24 24" width="26" height="26" fill="none"
+                   stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                   stroke-linejoin="round" aria-hidden="true">
+                <path d="M14 3v5h5" />
+                <path d="M19 8v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7z" />
+                <path d="M9 15l2 2 4-4" />
+              </svg>
+              <span class="dz-text"><strong>Signed copies you got back</strong></span>
+              <span class="dz-meta">PDFs — choose or drop them all</span>
+              <input type="file" id="returned-input" accept=".pdf" multiple class="visually-hidden" />
+            </label>
+          </div>
+
+          <div class="actions">
+            <button type="button" id="check-returned" class="btn btn-primary" disabled>
+              Check signed letters
+            </button>
+          </div>
+
+          <div id="check-results" class="results" role="status" aria-live="polite"></div>
         </section>
       </main>
 

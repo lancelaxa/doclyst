@@ -1,5 +1,7 @@
 import { PDFDict, PDFDocument, PDFName, StandardFonts, type PDFPage } from 'pdf-lib';
 import { DoclystError, safeErrorSummary } from '../errors.js';
+import { InflateLimitError, preflightOnce } from './limits.js';
+import { MAX_PDF_TEMPLATE_INFLATED_BYTES } from './fill.js';
 import { findPlaceholders } from '../template/placeholder.js';
 import {
   readGlyphs,
@@ -104,6 +106,13 @@ export async function preparePdfTemplate(
   template: Uint8Array,
   options: PrepareTemplateOptions = {},
 ): Promise<PrepareTemplateResult> {
+  try {
+    preflightOnce(template, MAX_PDF_TEMPLATE_INFLATED_BYTES);
+  } catch (error) {
+    if (!(error instanceof InflateLimitError)) throw error;
+    throw new DoclystError('LIMIT_EXCEEDED', 'The PDF expands to more than the supported size limit.');
+  }
+
   let doc: PDFDocument;
   try {
     doc = await PDFDocument.load(template, { updateMetadata: false });

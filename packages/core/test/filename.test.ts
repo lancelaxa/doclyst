@@ -238,3 +238,18 @@ describe('checkFilenameFields', () => {
     expect(checkFilenameFields('   ', columns)).toEqual([]);
   });
 });
+
+describe('names built from data that tries to look like something else', () => {
+  it('strips the controls that make a name display reversed', () => {
+    // Shown as "Offerexe.pdf" if left in.
+    expect(sanitizeFilename('Offer‮fdp.exe', '.pdf')).toBe('Offerfdp.exe.pdf');
+    expect(sanitizeFilename('a‏b⁦c⁩', '.pdf')).toBe('abc.pdf');
+  });
+
+  it('does not name a file after a property every object has', () => {
+    for (const key of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      const name = buildFilename({ NAME: 'Aisha' }, { template: `{{${key}}}-offer`, extension: '.pdf', index: 3, total: 9 });
+      expect(name).toBe('0003-offer.pdf');
+    }
+  });
+});

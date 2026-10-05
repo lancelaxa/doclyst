@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
-import { fillDocx, fillPreparedDocx, prepareDocx, readDocxFields, readDocxText } from '../src/docx/fill.js';
+import {
+  fillDocx,
+  fillPreparedDocx,
+  prepareDocx,
+  readDocxFields,
+  readDocxText,
+  readLinkedContent,
+} from '../src/docx/fill.js';
 import { DoclystError } from '../src/errors.js';
 import { FIXED_ARCHIVE_TIMESTAMP } from '../src/internal/deterministic.js';
 import { buildDocx, headerXml, para, run, splitRuns } from './helpers/fixtures.js';
@@ -128,6 +135,81 @@ describe('fillDocx', () => {
       const docx = buildDocx(para(run('{{NAME}}')));
       const entries = unzipSync(fillDocx(docx, echo, { scrubMetadata: false }).bytes);
       expect(strFromU8(entries['docProps/core.xml']!)).toContain('Template Author');
+    });
+
+    describe('beyond the core properties', () => {
+      const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+      const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+      const commented = () =>
+        buildDocx(
+          para(
+            '<w:commentRangeStart w:id="0"/>',
+            '<w:ins w:id="1" w:author="Template Author" w:date="2026-01-01T00:00:00Z">',
+            run('Dear {{NAME}}'),
+            '</w:ins>',
+            '<w:commentRangeEnd w:id="0"/>',
+            '<w:r><w:commentReference w:id="0"/></w:r>',
+          ),
+          {
+            extraParts: {
+              'word/comments.xml': `<w:comments ${W}><w:comment w:id="0" w:author="Template Author" w:initials="TA"><w:p><w:r><w:t>Is this salary band right?</w:t></w:r></w:p></w:comment></w:comments>`,
+              'word/people.xml': '<w15:people><w15:person w15:author="Template Author"><w15:presenceInfo w15:userId="author@example.com"/></w15:person></w15:people>',
+              'docProps/custom.xml': '<Properties><property name="Owner"><vt:lpwstr>Template Author</vt:lpwstr></property></Properties>',
+              'word/settings.xml': `<w:settings ${W}><w:attachedTemplate r:id="rId1"/><w:zoom w:percent="100"/></w:settings>`,
+              'word/_rels/settings.xml.rels': `<Relationships><Relationship Id="rId1" Type="${REL}/attachedTemplate" Target="file:///C:/Users/tauthor/Templates/HR.dotm" TargetMode="External"/></Relationships>`,
+              'word/_rels/document.xml.rels': `<Relationships><Relationship Id="rId5" Type="${REL}/comments" Target="comments.xml"/><Relationship Id="rId6" Type="http://schemas.microsoft.com/office/2011/relationships/people" Target="people.xml"/><Relationship Id="rId7" Type="${REL}/styles" Target="styles.xml"/></Relationships>`,
+              '[Content_Types].xml': '<Types><Override PartName="/word/document.xml" ContentType="main"/><Override PartName="/word/comments.xml" ContentType="comments"/><Override PartName="/docProps/custom.xml" ContentType="custom"/></Types>',
+            },
+          },
+        );
+
+      it('drops review comments, their authors and the people list', () => {
+        const entries = unzipSync(fillDocx(commented(), echo).bytes);
+        for (const part of ['word/comments.xml', 'word/people.xml', 'docProps/custom.xml']) {
+          expect(entries[part]).toBeUndefined();
+        }
+        const everything = Object.values(entries).map((bytes) => strFromU8(bytes)).join('\n');
+        expect(everything).not.toContain('Template Author');
+        expect(everything).not.toContain('salary band');
+        expect(everything).not.toContain('author@example.com');
+      });
+
+      it('keeps the package consistent once those parts are gone', () => {
+        const entries = unzipSync(fillDocx(commented(), echo).bytes);
+        const body = strFromU8(entries['word/document.xml']!);
+        const rels = strFromU8(entries['word/_rels/document.xml.rels']!);
+        const types = strFromU8(entries['[Content_Types].xml']!);
+        // Nothing may still point at a part that is no longer there.
+        expect(body).not.toMatch(/commentRangeStart|commentRangeEnd|commentReference/);
+        expect(rels).not.toContain('comments.xml');
+        expect(rels).not.toContain('people.xml');
+        expect(rels).toContain('styles.xml');
+        expect(types).not.toContain('/word/comments.xml');
+        expect(types).not.toContain('/docProps/custom.xml');
+        expect(types).toContain('/word/document.xml');
+        expect(textOf(fillDocx(commented(), echo).bytes)).toBe('Dear <NAME>');
+      });
+
+      it('leaves no names or times from tracked changes', () => {
+        // The changes themselves are accepted, so their wrappers go too.
+        const body = strFromU8(unzipSync(fillDocx(commented(), echo).bytes)['word/document.xml']!);
+        expect(body).not.toContain('<w:ins');
+        expect(body).not.toContain('Template Author');
+        expect(body).not.toContain('2026-01-01');
+      });
+
+      it("drops the path to the template on the author's machine", () => {
+        const entries = unzipSync(fillDocx(commented(), echo).bytes);
+        expect(strFromU8(entries['word/settings.xml']!)).not.toContain('attachedTemplate');
+        expect(strFromU8(entries['word/settings.xml']!)).toContain('w:zoom');
+        expect(strFromU8(entries['word/_rels/settings.xml.rels']!)).not.toContain('tauthor');
+      });
+
+      it('keeps all of it when scrubbing is turned off', () => {
+        const entries = unzipSync(fillDocx(commented(), echo, { scrubMetadata: false }).bytes);
+        expect(strFromU8(entries['word/comments.xml']!)).toContain('Template Author');
+        expect(strFromU8(entries['word/document.xml']!)).toContain('commentReference');
+      });
     });
   });
 
@@ -266,3 +348,82 @@ describe('readDocxText', () => {
     expect(readDocxText(filled)).toBe(readDocxText(template).replace('{{JOB_TITLE}}', 'Data Analyst'));
   });
 });
+
+describe('what the author could not see', () => {
+  const tracked = () =>
+    buildDocx(
+      para(
+        run('Basic salary: '),
+        '<w:del w:id="1" w:author="Template Author" w:date="2026-01-01T00:00:00Z"><w:r><w:delText>band 6,000 to 7,500, offer </w:delText></w:r></w:del>',
+        '<w:ins w:id="2" w:author="Template Author"><w:r><w:t>{{SALARY}}</w:t></w:r></w:ins>',
+        '<w:r><w:rPr><w:vanish/></w:rPr><w:t>Note to self: negotiable to {{MAX_SALARY}}</w:t></w:r>',
+        '<w:r><w:rPr><w:vanish w:val="false"/></w:rPr><w:t> per month.</w:t></w:r>',
+      ) +
+        para(
+          '<w:r><w:rPr><w:b/><w:rPrChange w:id="3" w:author="Template Author"><w:rPr/></w:rPrChange></w:rPr><w:t>Welcome.</w:t></w:r>',
+          '<w:moveFrom w:id="4" w:author="Template Author"><w:r><w:t>Old position.</w:t></w:r></w:moveFrom>',
+        ),
+    );
+
+  it('accepts tracked changes, so deleted words do not travel', () => {
+    const entries = unzipSync(fillDocx(tracked(), () => '5,000').bytes);
+    const body = strFromU8(entries['word/document.xml']!);
+    expect(body).not.toContain('6,000');
+    expect(body).not.toContain('Old position');
+    expect(body).not.toMatch(/<w:(del|ins|moveFrom|rPrChange)\b/);
+    expect(textOf(fillDocx(tracked(), () => '5,000').bytes)).toBe('Basic salary: 5,000 per month.\nWelcome.');
+  });
+
+  it('removes hidden text, and does not ask for its placeholders', () => {
+    expect(readDocxFields(tracked())).toEqual(['SALARY']);
+    const body = strFromU8(unzipSync(fillDocx(tracked(), () => '5,000').bytes)['word/document.xml']!);
+    expect(body).not.toContain('negotiable');
+  });
+
+  it('does it even with metadata scrubbing off, because it is content', () => {
+    const body = strFromU8(unzipSync(fillDocx(tracked(), () => '5,000', { scrubMetadata: false }).bytes)['word/document.xml']!);
+    expect(body).not.toContain('6,000');
+    expect(body).not.toContain('negotiable');
+  });
+
+  it('leaves a run alone when it holds another run, rather than cut it wrongly', () => {
+    // A text box inside a run: the inner run's closing tag comes first.
+    const nested = buildDocx(
+      para(
+        '<w:r><w:rPr><w:vanish/></w:rPr><w:drawing><w:txbxContent><w:p><w:r><w:t>Inner</w:t></w:r></w:p></w:txbxContent></w:drawing></w:r>',
+        run('Dear {{NAME}}'),
+      ),
+    );
+    const body = strFromU8(unzipSync(fillDocx(nested, echo).bytes)['word/document.xml']!);
+    expect(body).toContain('<w:txbxContent><w:p><w:r><w:t xml:space="preserve">Inner</w:t></w:r></w:p></w:txbxContent>');
+    expect(body.match(/<w:r>/g)?.length).toBe(body.match(/<\/w:r>/g)?.length);
+  });
+});
+
+describe('readLinkedContent', () => {
+  const withRels = (rels: string) =>
+    buildDocx(para(run('{{NAME}}')), { extraParts: { 'word/_rels/document.xml.rels': `<Relationships>${rels}</Relationships>` } });
+  const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+  it('reports a picture loaded from outside the document', () => {
+    const docx = withRels(`<Relationship Id="rId9" Type="${REL}/image" Target="https://tracker.example.com/p.png" TargetMode="External"/>`);
+    expect(readLinkedContent(docx)).toEqual(['a picture linked rather than embedded']);
+  });
+
+  it('reports objects and content linked to outside files', () => {
+    const docx = withRels(
+      `<Relationship Id="rId1" Type="${REL}/oleObject" Target="file:///\\\\server\\share\\x.xlsx" TargetMode="External"/>` +
+        `<Relationship Id="rId2" Type="${REL}/subDocument" Target="part.docx" TargetMode="External"/>`,
+    );
+    expect(readLinkedContent(docx)).toEqual(['an object linked to an outside file', 'content pulled in from an outside file']);
+  });
+
+  it('ignores clickable links and embedded pictures', () => {
+    const docx = withRels(
+      `<Relationship Id="rId1" Type="${REL}/hyperlink" Target="https://example.com" TargetMode="External"/>` +
+        `<Relationship Id="rId2" Type="${REL}/image" Target="media/logo.png"/>`,
+    );
+    expect(readLinkedContent(docx)).toEqual([]);
+  });
+});
+

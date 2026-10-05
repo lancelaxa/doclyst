@@ -21,8 +21,16 @@ For anyone who needs the answer rather than the reasoning:
 - **Personal data never reaches an error message or a log.** Messages name the
   field and the row — never the value — so they are safe to screenshot or paste
   into a ticket.
-- **The author's details do not travel.** The template's author, company and
-  timestamps are stripped from every generated document by default.
+- **The author's details do not travel.** The template's author, company,
+  timestamps, review comments and tracked-change names are stripped from every
+  generated document by default. One gap remains, noted below: images a Word
+  template loads from the internet.
+- **It never sends email.** It can write an email for each letter, as a file
+  you open and send yourself. Every address is checked first, and the result
+  is shown by row number, never by address.
+- **Checking signed copies happens here too.** Letters you sent and copies that
+  came back are compared in the same tab, and the results name a page and a
+  place, never the text.
 - **No AI is involved.** No model, no inference, no third-party service. It is
   a deterministic tool: the same inputs always produce the same bytes.
 
@@ -39,7 +47,9 @@ PDPA-compliant, and this document is not legal advice.
 Compliance depends on things the tool cannot see or control: your legal basis
 for processing, your consent and notification practices, your retention
 schedule, who you give the generated documents to, and how you transmit them.
-Doclyst helps with the *generation* step and nothing else.
+Doclyst helps with *generating* the documents, *preparing* the emails that
+carry them, and *checking* signed copies that come back. It does not send,
+store or track anything.
 
 The tool is also only one link in the chain. Your source spreadsheet, the
 folder you write into, your backups, and whatever you do with the documents
@@ -76,10 +86,12 @@ interface is bytes in, bytes out. Verifiable in one command:
 grep -rE "fetch|http|net|dns|child_process|node:fs" packages/core/src
 ```
 
-Runtime dependencies are two focused, widely used libraries — `fflate` (ZIP)
-and `pdf-lib` (PDF) — both pure computation with no network capability. The
-CSV parser, the XLSX reader and the DOCX engine are implemented in-repo, which
-keeps the amount of third-party code touching personal data small.
+The engine's runtime dependencies are two focused, widely used libraries —
+`fflate` (ZIP) and `pdf-lib` (PDF) — both pure computation with no network
+capability. The CSV parser, the XLSX reader and the DOCX engine are
+implemented in-repo, which keeps the amount of third-party code touching
+personal data small. The browser page adds one more, pdf.js, described under
+*Checking signed copies*.
 
 The spreadsheet reader is deliberately in-repo rather than a dependency. The
 two realistic options were both disqualifying for this threat model: `xlsx`
@@ -159,9 +171,45 @@ Office and PDF files carry metadata that is easy to forget and travels to every
 recipient. By default Doclyst removes, from each generated file:
 
 - **DOCX** — `dc:creator`, `cp:lastModifiedBy`, `cp:lastPrinted`,
-  `dc:description`, `cp:category`, plus `Company` and `Manager`.
+  `dc:description`, `cp:category`, plus `Company` and `Manager`. Also the
+  template's **review comments** (which Word shows in the margin, so a note
+  left on the template would be read by every recipient), the list of
+  commenters with their email addresses, custom document properties, the
+  names and times on tracked changes, and the path to the template on the
+  author's machine. The package's relationships and content types are updated
+  to match, so Word does not report the file as damaged.
 - **PDF** — title, author, subject, keywords, producer and creator, with
-  creation and modification dates fixed to a constant.
+  creation and modification dates fixed to a constant; any further fields a
+  producer added to the document information; the XMP metadata block, which
+  Word writes on every "Save as PDF" and which repeats the author's name;
+  application-private data; sticky-note comments and their pop-ups; and the
+  author and timestamps on any other annotation. Objects removed this way are
+  deleted from the file, not merely unlinked — an unlinked object is still in
+  the file for anything that looks.
+
+Whatever the metadata setting, a filled PDF also loses any script, open action
+or attached file the template carried. A letter has no use for them, and they
+would otherwise reach every recipient.
+
+Two more things are removed from every generated Word document, whatever the
+metadata setting, because they are content rather than metadata: **tracked
+changes are accepted**, so words deleted from the template with Track Changes
+on do not travel (a struck-out salary band is one click away for any
+recipient otherwise), and **hidden text is removed**. The letter that goes out
+is the one the author saw in Word's ordinary "No Markup" view.
+
+A Word template that **links** to something outside itself — a picture
+inserted with "Link to File", an object linked rather than embedded — keeps
+that link, because Doclyst cannot fetch the content to embed it and removing
+it would leave a broken picture. Each recipient's Word would fetch it when the
+letter is opened, telling whoever runs that address who opened it, or sending
+a network share the recipient's sign-in details. So Doclyst **warns** about it
+as soon as the template is loaded, and again in the results: embed the
+picture instead. Clickable hyperlinks are not warned about; they go nowhere
+until clicked.
+
+A PDF template is checked before it is parsed, as returned copies are, and
+refused if its compressed content would expand past 200 MB.
 
 Archive timestamps are also fixed, so the file does not record when each record
 was processed. Use `--keep-metadata` to opt out.
@@ -193,6 +241,92 @@ the file and visible the moment the cover is taken off.
 
 This runs in the same process as everything else, on the machine holding the
 file. No page, glyph or field name is sent anywhere.
+
+## Email drafts
+
+Doclyst writes email drafts; it does not send them. Each draft is an `.eml`
+file — an addressed message with one document attached — written alongside the
+document, the same way the document is. The page's network block is unchanged,
+and nothing in the engine can open a connection. Sending is done by a person, in
+their own email program, one message at a time.
+
+What the drafts are designed to prevent is a misdirected letter:
+
+- **Pairing is fixed by the row.** A document and the address it goes to are
+  read from the same row at the same moment, so one person's letter cannot be
+  attached to another person's email.
+- **Each address must be exactly one plain address.** A cell holding an address
+  followed by a line break and `Bcc: someone@example.org` would otherwise add a
+  hidden recipient to that letter — one the To line of the draft would not show.
+  Any control character, comma, semicolon, space, angle bracket or quote in an
+  address fails the row. The subject is reduced to a single line for the same
+  reason. Both checks are covered by tests that were confirmed to fail when the
+  checks are removed.
+- **A blank address fails the row** whatever the missing-values setting says.
+  "Leave blank" is meaningful for a middle name, not for where a letter goes.
+- **Shared addresses are reported** before and after the run, by row number.
+- **Addresses never appear in messages.** Problems are reported by row and
+  column; the page's pre-run check counts rows rather than listing addresses.
+
+The drafts have no sender and no date, so the same input gives the same file,
+and the message goes out from whichever account opens it. Once sent, an email
+and its attachment are in your organisation's email system, and its rules
+apply.
+
+## Checking signed copies
+
+The check runs entirely in the tab. Letters sent and copies returned are read
+with the same PDF reader the rest of the tool uses, compared in memory, and
+discarded when the tab closes.
+
+It compares what each page *draws*, not what the file contains: every character,
+with its position, including the values inside flattened form fields, plus
+every painted shape, image and visible annotation. A returned copy passes only
+if everything the sent letter drew is still there, in place, **and still
+visible**: text that is still in the file but drawn in white, in an invisible
+mode, fully transparent, or clipped away counts as changed, as does a page
+whose visible area has been shrunk or turned. Anything new is treated as the
+signature unless it overlaps the original text — and a filled rectangle of any
+colour, or a pale fill of any shape, over the original text is reported as a
+cover-up outright, since a signature is ink and never a box.
+
+Every returned file is supplied by someone outside the organisation, so it is
+treated as hostile. There are fixed limits on file size (50 MB), on how much
+can be decompressed (64 MB, checked before the file is parsed and enforced as
+it is read), on how many times embedded drawings may be drawn, and on how many
+marks a file may hold. A file past any of them is reported as unable to be
+checked rather than allowed to freeze the page.
+
+**It also compares how each page looks.** A PDF can say one thing and show
+another: a font whose "4" is drawn as a "9", a layer switched off, a pattern
+painted over the text. So both versions of each page are also rendered to
+pixels and compared. Wherever the sent page had ink and the returned page
+does not, the copy is reported as changed; new ink that the structural
+comparison cannot account for is sent for review. This is what catches a
+forger who understands PDF internals, which the structural comparison alone
+does not.
+
+Rendering is done by **pdf.js**, Mozilla's PDF renderer (the one in Firefox),
+bundled into the page — it is why the single-file app is about 2.2 MB rather
+than 0.5 MB. It runs in the same tab, on bytes already in memory, configured to
+load nothing: no font downloads, no WebAssembly decoders, no form scripting.
+Pages are rendered only after a file has passed the size and complexity limits
+above. A browser test checks a returned copy and asserts that no request of
+any kind, to any origin, is made while it does.
+
+**What it still does not do.** It cannot prove who signed. It compares what
+the page shows on screen; a PDF built to print differently from how it
+displays is not compared in print form, though one using layers — the usual
+way to do that — is sent for review. The letter you sent remains the record of
+what was offered; keep it.
+
+Results are written to be safe to share: they give a page and a region ("Page 1,
+near the top"), never the words found there. A scanned or photographed copy has
+no text to compare, so it is reported as unable to be checked rather than
+passed.
+
+What this does not do: it does not establish who signed. A drawn signature is
+evidence that someone signed, not proof of identity.
 
 ## Rendering DOCX to PDF
 
@@ -256,10 +390,17 @@ no server, no upload endpoint and no backend to compromise.
   remote scripts, styles, fonts or images. Even if a future change tried to
   send a record somewhere, the browser would refuse. Verified in the tests by
   attempting a `fetch` from inside the page and asserting it is blocked.
-- **Nothing in the bundle can talk to the network.** The built output contains
-  no `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource` or `sendBeacon`.
-  Vite's modulepreload polyfill, which calls `fetch`, is deliberately disabled
-  so this stays true and greppable.
+- **Doclyst's own code makes no network calls.** Nothing under `apps/web/src`
+  or `packages/core/src` uses `fetch`, `XMLHttpRequest`, `WebSocket`,
+  `EventSource` or `sendBeacon`, and Vite's modulepreload polyfill, which
+  calls `fetch`, is disabled. The bundle does include pdf.js, whose general
+  design includes loading PDFs from web addresses; Doclyst only ever hands it
+  bytes already in memory, configures it to fetch nothing, and the page's
+  policy above would block it regardless. Tests drive the real page through a
+  batch and a signed-copy check and assert no request leaves it.
+- **It will not run inside another site's page.** A page that framed it could
+  lay its own controls over Doclyst's. GitHub Pages cannot send the header
+  that forbids framing, so the page checks for itself and refuses to start.
 - **Nothing is persisted.** No `localStorage`, no `sessionStorage`, no
   `indexedDB`, no cookies and no service worker. Asserted after a full batch.
   Closing the tab disposes of every record.
