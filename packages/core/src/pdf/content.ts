@@ -303,8 +303,12 @@ export interface FontInfo {
 
 /** Read the fonts a page's resources make available, keyed by resource name. */
 export function readPageFonts(page: PDFPage): Map<string, FontInfo> {
+  return readResourceFonts(page.node.Resources());
+}
+
+/** Read the fonts a resource dictionary makes available, keyed by name. */
+export function readResourceFonts(resources: PDFDict | undefined): Map<string, FontInfo> {
   const fonts = new Map<string, FontInfo>();
-  const resources = page.node.Resources();
   const fontDict = resources?.lookup(PDFName.of('Font'));
   if (!(fontDict instanceof PDFDict)) return fonts;
 
@@ -623,11 +627,11 @@ function readToUnicode(font: PDFDict): Map<number, string> | undefined {
 
 // --- replaying the text operators ---------------------------------------
 
-type Matrix = readonly [number, number, number, number, number, number];
+export type Matrix = readonly [number, number, number, number, number, number];
 
-const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
+export const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 
-function multiply(a: Matrix, b: Matrix): Matrix {
+export function multiply(a: Matrix, b: Matrix): Matrix {
   return [
     a[0] * b[0] + a[1] * b[2],
     a[0] * b[1] + a[1] * b[3],
@@ -696,12 +700,24 @@ export function writePageContent(page: PDFPage, content: string): void {
  * not know — so callers treat an empty or partial result as "cannot prepare
  * this page" rather than as "the page has no text".
  */
-export function readGlyphs(content: string, fonts: ReadonlyMap<string, FontInfo>): Glyph[] {
+export function readGlyphs(
+  content: string,
+  fonts: ReadonlyMap<string, FontInfo>,
+  options: ReadGlyphsOptions = {},
+): Glyph[] {
   const operations = parseOperations(content);
   const glyphs: Glyph[] = [];
 
-  const stack: Matrix[] = [];
-  let ctm: Matrix = IDENTITY;
+  const stack: { ctm: Matrix; fillLightness: number }[] = [];
+  let ctm: Matrix = options.ctm ?? IDENTITY;
+  /** Lightness of the fill colour in force, 0 for black to 1 for white. */
+  let fillLightness = 0;
+  /** Points of the path under construction, already in page space. */
+  let path: [number, number][] = [];
+  const point = (x: number, y: number): [number, number] => [
+    x * ctm[0] + y * ctm[2] + ctm[4],
+    x * ctm[1] + y * ctm[3] + ctm[5],
+  ];
   let textMatrix: Matrix = IDENTITY;
   let lineMatrix: Matrix = IDENTITY;
 
@@ -773,11 +789,24 @@ export function readGlyphs(content: string, fonts: ReadonlyMap<string, FontInfo>
 
     switch (operation.operator) {
       case 'q':
-        stack.push(ctm);
+        stack.push({ ctm, fillLightness });
         break;
-      case 'Q':
-        ctm = stack.pop() ?? ctm;
+      case 'Q': {
+        const saved = stack.pop();
+        if (saved) ({ ctm, fillLightness } = saved);
         break;
+      }
+      case 'g':
+      case 'rg':
+      case 'k':
+      case 'sc':
+      case 'scn': {
+        // Only numeric components are read; a pattern name leaves the last
+        // known value, which errs towards "dark" and so towards fewer alarms.
+        const lightness = lightnessOf(args);
+        if (lightness !== undefined) fillLightness = lightness;
+        break;
+      }
       case 'cm':
         if (args.length >= 6) ctm = multiply(args.slice(0, 6) as unknown as Matrix, ctm);
         break;
@@ -860,12 +889,108 @@ export function readGlyphs(content: string, fonts: ReadonlyMap<string, FontInfo>
         }
         break;
       }
+      case 'm':
+      case 'l':
+        if (args.length >= 2) path.push(point(args[0] as number, args[1] as number));
+        break;
+      case 'c':
+      case 'v':
+      case 'y':
+        // Control points bound a Bézier curve, so including them gives a box
+        // that is never smaller than the curve — the safe direction here.
+        for (let i = 0; i + 1 < args.length; i += 2) path.push(point(args[i] as number, args[i + 1] as number));
+        break;
+      case 're':
+        if (args.length >= 4) {
+          const [x, y, w, h] = args as [number, number, number, number];
+          path.push(point(x, y), point(x + w, y), point(x, y + h), point(x + w, y + h));
+        }
+        break;
+      case 'S':
+      case 's':
+      case 'f':
+      case 'F':
+      case 'f*':
+      case 'B':
+      case 'B*':
+      case 'b':
+      case 'b*':
+        if (path.length > 0 && options.onPaint) {
+          const stroke = operation.operator === 'S' || operation.operator === 's';
+          options.onPaint(boxOf(path), stroke ? 'stroke' : 'fill', fillLightness);
+        }
+        path = [];
+        break;
+      case 'n':
+        path = [];
+        break;
+      case 'Do': {
+        const name = operation.operands.find((token) => token.kind === 'name');
+        if (name?.kind === 'name') options.onXObject?.(name.value, ctm);
+        break;
+      }
+      case 'sh':
+        // A shading fills the current clip, whose extent is not tracked. Say
+        // so rather than guess a box that might miss what it covers.
+        options.onPaint?.(undefined, 'fill', fillLightness);
+        break;
       default:
         break;
     }
   });
 
   return glyphs;
+}
+
+/** An axis-aligned box in page space. */
+export interface Box {
+  readonly x0: number;
+  readonly y0: number;
+  readonly x1: number;
+  readonly y1: number;
+}
+
+export interface ReadGlyphsOptions {
+  /**
+   * Transformation already in force when the stream starts, as for the
+   * content of a form XObject drawn from a page.
+   */
+  readonly ctm?: Matrix;
+  /** Called for each `Do`, with the XObject's resource name and the CTM. */
+  readonly onXObject?: (name: string, ctm: Matrix) => void;
+  /**
+   * Called for each painted path. The box is undefined when the painted area
+   * cannot be known, as for a shading.
+   */
+  readonly onPaint?: (box: Box | undefined, kind: 'fill' | 'stroke', fillLightness: number) => void;
+}
+
+/** Perceived lightness of a colour given as 1 (grey), 3 (RGB) or 4 (CMYK) components. */
+function lightnessOf(components: readonly number[]): number | undefined {
+  if (components.length === 1) return components[0];
+  if (components.length === 3) {
+    const [r, g, b] = components as [number, number, number];
+    return 0.299 * r + 0.587 * g + 0.114 * b;
+  }
+  if (components.length === 4) {
+    const [c, m, y, k] = components as [number, number, number, number];
+    return 0.299 * (1 - c) * (1 - k) + 0.587 * (1 - m) * (1 - k) + 0.114 * (1 - y) * (1 - k);
+  }
+  return undefined;
+}
+
+function boxOf(points: readonly (readonly [number, number])[]): Box {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const [x, y] of points) {
+    x0 = Math.min(x0, x);
+    y0 = Math.min(y0, y);
+    x1 = Math.max(x1, x);
+    y1 = Math.max(y1, y);
+  }
+  return { x0, y0, x1, y1 };
 }
 
 // --- rewriting -----------------------------------------------------------

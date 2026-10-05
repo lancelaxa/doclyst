@@ -41,6 +41,13 @@ apps/cli        Command-line interface. Owns all file I/O.
 apps/web        Local browser interface. Static; no server, no upload.
 ```
 
+Within the engine, `output/email.ts` writes `.eml` drafts and validates
+addresses, and `verify/returned.ts` compares signed copies with the letters that
+were sent. Both are reachable from the browser only; the CLI has no flags for
+them yet. The comparison relies on `readGlyphs` in `pdf/content.ts`, which also
+reports painted paths, fill lightness and `Do` operations so that form XObjects
+and annotation appearance streams can be followed.
+
 The engine is deliberately pure. Because nothing in `packages/core` can read a
 file or open a socket, "the engine cannot transmit your data anywhere" is a
 property of the code rather than a promise.

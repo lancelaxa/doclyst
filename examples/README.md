@@ -7,7 +7,9 @@ personal data appears in this repository.
 node examples/make-example.mjs      # writes offer-letter.docx next to staff.csv
 ```
 
-- `staff.csv` — four synthetic staff records.
+- `staff.csv` — four synthetic staff records. The email addresses use
+  `example.com`, a domain reserved for examples: nothing sent to it is ever
+  delivered, so trying the email drafts cannot reach anyone.
 - `make-example.mjs` — writes `offer-letter.docx`, a Word template using
   `{{FULL_NAME}}`, `{{JOB_TITLE}}`, `{{BASIC_SALARY}}`, `{{START_DATE}}` and
   `{{STAFF_ID}}`.

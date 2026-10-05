@@ -23,6 +23,12 @@ For anyone who needs the answer rather than the reasoning:
   into a ticket.
 - **The author's details do not travel.** The template's author, company and
   timestamps are stripped from every generated document by default.
+- **It never sends email.** It can write an email for each letter, as a file
+  you open and send yourself. Every address is checked first, and the result
+  is shown by row number, never by address.
+- **Checking signed copies happens here too.** Letters you sent and copies that
+  came back are compared in the same tab, and the results name a page and a
+  place, never the text.
 - **No AI is involved.** No model, no inference, no third-party service. It is
   a deterministic tool: the same inputs always produce the same bytes.
 
@@ -39,7 +45,9 @@ PDPA-compliant, and this document is not legal advice.
 Compliance depends on things the tool cannot see or control: your legal basis
 for processing, your consent and notification practices, your retention
 schedule, who you give the generated documents to, and how you transmit them.
-Doclyst helps with the *generation* step and nothing else.
+Doclyst helps with *generating* the documents, *preparing* the emails that
+carry them, and *checking* signed copies that come back. It does not send,
+store or track anything.
 
 The tool is also only one link in the chain. Your source spreadsheet, the
 folder you write into, your backups, and whatever you do with the documents
@@ -193,6 +201,59 @@ the file and visible the moment the cover is taken off.
 
 This runs in the same process as everything else, on the machine holding the
 file. No page, glyph or field name is sent anywhere.
+
+## Email drafts
+
+Doclyst writes email drafts; it does not send them. Each draft is an `.eml`
+file — an addressed message with one document attached — written alongside the
+document, the same way the document is. The page's network block is unchanged,
+and nothing in the engine can open a connection. Sending is done by a person, in
+their own email program, one message at a time.
+
+What the drafts are designed to prevent is a misdirected letter:
+
+- **Pairing is fixed by the row.** A document and the address it goes to are
+  read from the same row at the same moment, so one person's letter cannot be
+  attached to another person's email.
+- **Each address must be exactly one plain address.** A cell holding an address
+  followed by a line break and `Bcc: someone@example.org` would otherwise add a
+  hidden recipient to that letter — one the To line of the draft would not show.
+  Any control character, comma, semicolon, space, angle bracket or quote in an
+  address fails the row. The subject is reduced to a single line for the same
+  reason. Both checks are covered by tests that were confirmed to fail when the
+  checks are removed.
+- **A blank address fails the row** whatever the missing-values setting says.
+  "Leave blank" is meaningful for a middle name, not for where a letter goes.
+- **Shared addresses are reported** before and after the run, by row number.
+- **Addresses never appear in messages.** Problems are reported by row and
+  column; the page's pre-run check counts rows rather than listing addresses.
+
+The drafts have no sender and no date, so the same input gives the same file,
+and the message goes out from whichever account opens it. Once sent, an email
+and its attachment are in your organisation's email system, and its rules
+apply.
+
+## Checking signed copies
+
+The check runs entirely in the tab. Letters sent and copies returned are read
+with the same PDF reader the rest of the tool uses, compared in memory, and
+discarded when the tab closes.
+
+It compares what each page *draws*, not what the file contains: every character,
+with its position, including the values inside flattened form fields, plus
+every painted shape, image and visible annotation. A returned copy passes only
+if everything the sent letter drew is still there, in place. Anything new is
+treated as the signature unless it overlaps the original text — and a light,
+filled shape over the original text is reported as a cover-up outright, since a
+signature is ink, never white.
+
+Results are written to be safe to share: they give a page and a region ("Page 1,
+near the top"), never the words found there. A scanned or photographed copy has
+no text to compare, so it is reported as unable to be checked rather than
+passed.
+
+What this does not do: it does not establish who signed. A drawn signature is
+evidence that someone signed, not proof of identity.
 
 ## Rendering DOCX to PDF
 

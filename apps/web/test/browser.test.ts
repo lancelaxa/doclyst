@@ -6,7 +6,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unzipSync } from 'fflate';
-import { readDocxText } from '@doclyst/core';
+import { fillPdf, preparePdfTemplate, readDocxText, ValueResolver } from '@doclyst/core';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { makeTemplate, makePdfTemplate, makePlaceholderPdf } from './helpers/template.js';
 import { pdfText } from './helpers/pdftext.js';
 import { installFakeFileSystem, removeFileSystemAccess } from './helpers/fake-fs.js';
@@ -963,6 +964,163 @@ describe('choosing files', () => {
       await expect
         .poll(() => page.textContent('#filename-warnings'))
         .toContain('visible without opening');
+      await page.close();
+    });
+  });
+
+  describe('email drafts', () => {
+    const EMAIL_CSV = `Full Name,Basic Salary,Email
+Aisha Rahman,4500,aisha.rahman@example.com
+Wei Lun Tan,5200,weilun.tan@example.com
+Priya Nair,6100,priya.nair@example.com
+`;
+
+    async function loadWithEmails(page: Page, csv = EMAIL_CSV): Promise<void> {
+      await page.setInputFiles('#template-input', {
+        name: 'offer.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        buffer: Buffer.from(makeTemplate(['FULL_NAME', 'BASIC_SALARY'])),
+      });
+      await page.setInputFiles('#data-input', { name: 'staff.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+      await page.check('#make-emails');
+    }
+
+    it('picks the email column and confirms the addresses before anything is made', async () => {
+      const { page } = await openPage();
+      await loadWithEmails(page);
+      expect(await page.inputValue('#email-column')).toBe('Email');
+      await expect.poll(() => page.textContent('#email-check')).toContain('All 3 addresses look right');
+      await page.close();
+    });
+
+    it('warns about a bad or shared address by row, without showing it', async () => {
+      const { page } = await openPage();
+      await loadWithEmails(
+        page,
+        `Full Name,Basic Salary,Email
+Aisha Rahman,4500,aisha.rahman@example.com
+Wei Lun Tan,5200,"weilun@example.com
+Bcc: someone@example.org"
+Priya Nair,6100,AISHA.RAHMAN@example.com
+`,
+      );
+      const said = (await page.textContent('#email-check')) ?? '';
+      expect(said).toContain('Row 2: the address is blank, or is not one valid email address');
+      expect(said).toContain('Rows 1 and 3 have the same email address');
+      expect(said).not.toContain('example');
+      await page.close();
+    });
+
+    it('will not generate until a column is chosen', async () => {
+      const { page } = await openPage();
+      await loadWithEmails(page);
+      await page.selectOption('#email-column', '');
+      expect(await page.isDisabled('#generate')).toBe(true);
+      await page.selectOption('#email-column', 'Email');
+      expect(await page.isDisabled('#generate')).toBe(false);
+      await page.close();
+    });
+
+    it('puts a draft beside each document in the ZIP, and sends nothing', async () => {
+      const { page, requests } = await openPage();
+      await loadWithEmails(page);
+      await page.click('#generate');
+      await expect.poll(() => page.textContent('#results')).toContain('3 documents and 3 emails ready');
+      expect(await page.textContent('#results')).toContain('double-click each .eml file');
+
+      const download = page.waitForEvent('download');
+      await page.getByRole('button', { name: 'Download all as ZIP' }).click();
+      const stream = await (await download).createReadStream();
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) chunks.push(chunk as Buffer);
+      const files = unzipSync(new Uint8Array(Buffer.concat(chunks)));
+
+      expect(Object.keys(files).sort()).toEqual([
+        'document-0001.docx',
+        'document-0001.eml',
+        'document-0002.docx',
+        'document-0002.eml',
+        'document-0003.docx',
+        'document-0003.eml',
+      ]);
+      const draft = Buffer.from(files['document-0002.eml'] as Uint8Array).toString('utf8');
+      expect(draft).toContain('To: weilun.tan@example.com\r\n');
+      expect(draft).toContain('X-Unsent: 1\r\n');
+      expect(draft).toContain('filename="Offer letter.docx"');
+      // The attachment is that row's document, byte for byte.
+      const attached = /filename="Offer letter.docx"\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/.exec(draft)?.[1];
+      expect(Buffer.from((attached ?? '').replace(/\s+/g, ''), 'base64').equals(Buffer.from(files['document-0002.docx'] as Uint8Array))).toBe(true);
+
+      expect(offOriginRequests(requests)).toEqual([]);
+      await page.close();
+    });
+  });
+
+  describe('checking signed letters', () => {
+    const PEOPLE = [
+      { NAME: 'Aisha Rahman', SALARY: '4,500' },
+      { NAME: 'Wei Lun Tan', SALARY: '5,200' },
+      { NAME: 'Priya Nair', SALARY: '6,100' },
+    ];
+
+    async function letters(): Promise<{ sent: Uint8Array[]; signed: Uint8Array; tampered: Uint8Array }> {
+      const doc = await PDFDocument.create();
+      const page = doc.addPage([595, 842]);
+      const font = await doc.embedFont(StandardFonts.Helvetica);
+      page.drawText('Dear {{NAME}},', { x: 72, y: 720, size: 11, font });
+      page.drawText('Basic salary: S$ {{SALARY}} per month', { x: 72, y: 690, size: 11, font });
+      page.drawText('Signature: ____________________', { x: 72, y: 160, size: 11, font });
+      const template = (await preparePdfTemplate(await doc.save(), { widthFactor: 3 })).bytes;
+      const sent = await Promise.all(
+        PEOPLE.map(async (person) => {
+          const resolver = new ValueResolver(person);
+          return (await fillPdf(template, (key, original) => resolver.resolve(key, original), {})).bytes;
+        }),
+      );
+      const sign = async (bytes: Uint8Array, tamper: boolean) => {
+        const copy = await PDFDocument.load(bytes);
+        const first = copy.getPage(0);
+        first.drawLine({ start: { x: 140, y: 165 }, end: { x: 230, y: 180 }, thickness: 1.5, color: rgb(0, 0, 0.5) });
+        if (tamper) first.drawRectangle({ x: 160, y: 686, width: 40, height: 14, color: rgb(1, 1, 1) });
+        return copy.save();
+      };
+      return { sent, signed: await sign(sent[1] as Uint8Array, false), tampered: await sign(sent[0] as Uint8Array, true) };
+    }
+
+    it('lists what changed first, what passed, and what has not come back', async () => {
+      const { page, requests } = await openPage();
+      const { sent, signed, tampered } = await letters();
+      await page.setInputFiles(
+        '#sent-input',
+        sent.map((bytes, i) => ({ name: `document-000${i + 1}.pdf`, mimeType: 'application/pdf', buffer: Buffer.from(bytes) })),
+      );
+      expect(await page.isDisabled('#check-returned')).toBe(true);
+      await page.setInputFiles('#returned-input', [
+        { name: 'Wei Lun signed.pdf', mimeType: 'application/pdf', buffer: Buffer.from(signed) },
+        { name: 'offer-back.pdf', mimeType: 'application/pdf', buffer: Buffer.from(tampered) },
+      ]);
+      expect(await page.textContent('#sent-drop')).toContain('3 letters');
+      expect(await page.textContent('#returned-drop')).toContain('2 signed copies');
+
+      await page.click('#check-returned');
+      await expect.poll(() => page.locator('.check-item').count()).toBe(2);
+
+      const items = page.locator('.check-item');
+      expect(await items.nth(0).getAttribute('class')).toContain('changed');
+      expect(await items.nth(0).textContent()).toContain('Changed — do not accept as it is');
+      expect(await items.nth(0).textContent()).toContain('matches document-0001.pdf');
+      expect(await items.nth(0).textContent()).toContain('covered over');
+      expect(await items.nth(1).textContent()).toContain('Signed, nothing changed');
+      expect(await items.nth(1).textContent()).toContain('matches document-0002.pdf');
+      expect(await page.textContent('#check-results')).toContain('Checked 2: 1 changed · 1 signed');
+      expect(await page.textContent('.not-returned summary')).toBe('1 letter not back yet');
+
+      const said = (await page.textContent('#check-results')) ?? '';
+      for (const person of PEOPLE) {
+        expect(said).not.toContain(person.NAME);
+        expect(said).not.toContain(person.SALARY);
+      }
+      expect(offOriginRequests(requests)).toEqual([]);
       await page.close();
     });
   });

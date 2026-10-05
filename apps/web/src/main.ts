@@ -1,7 +1,9 @@
 import {
   DoclystError,
   buildZip,
+  checkEmailAddress,
   checkFilenameTemplate,
+  checkReturnedLetters,
   checkPdfTemplateFit,
   detectTemplateKind,
   normalizeKey,
@@ -15,6 +17,10 @@ import {
   safeErrorSummary,
   streamBatch,
   type BatchFailure,
+  type BatchOptions,
+  type ReturnedCheck,
+  type ReturnedLetterReport,
+  type ReturnedStatus,
   type BatchResult,
   type BatchSummary,
   type DataRecord,
@@ -87,6 +93,19 @@ const missingSelect = byId<HTMLSelectElement>('missing-select');
 const emptyIsMissing = byId<HTMLInputElement>('empty-is-missing');
 const scrubMetadata = byId<HTMLInputElement>('scrub-metadata');
 const flattenPdf = byId<HTMLInputElement>('flatten-pdf');
+const makeEmails = byId<HTMLInputElement>('make-emails');
+const emailFields = byId<HTMLDivElement>('email-fields');
+const emailColumn = byId<HTMLSelectElement>('email-column');
+const emailCheck = byId<HTMLDivElement>('email-check');
+const emailSubject = byId<HTMLInputElement>('email-subject');
+const attachmentName = byId<HTMLInputElement>('attachment-name');
+const emailBody = byId<HTMLTextAreaElement>('email-body');
+const sentDrop = byId<HTMLLabelElement>('sent-drop');
+const sentInput = byId<HTMLInputElement>('sent-input');
+const returnedDrop = byId<HTMLLabelElement>('returned-drop');
+const returnedInput = byId<HTMLInputElement>('returned-input');
+const checkButton = byId<HTMLButtonElement>('check-returned');
+const checkResults = byId<HTMLDivElement>('check-results');
 const generateButton = byId<HTMLButtonElement>('generate');
 const saveFolderButton = byId<HTMLButtonElement>('save-folder');
 const saveZipButton = byId<HTMLButtonElement>('save-zip');
@@ -342,6 +361,7 @@ function describeData(): void {
     fieldList('Columns', fields),
     ...unmatchedNotice(),
   );
+  populateEmailColumns();
   refresh();
 }
 
@@ -464,15 +484,11 @@ async function streamToDisk(target: 'folder' | 'zip'): Promise<void> {
 
   const failures: BatchFailure[] = [];
   let written = 0;
+  let emailsWritten = 0;
   let bytesWritten = 0;
 
   const stream = streamBatch(loadedTemplate.template, loadedData.records, {
-    missing: missingSelect.value as MissingValuePolicy,
-    outputFormat: outputFormat(),
-    treatEmptyAsMissing: emptyIsMissing.checked,
-    filenameTemplate: filenameInput.value.trim() || undefined,
-    docx: { scrubMetadata: scrubMetadata.checked },
-    pdf: { scrubMetadata: scrubMetadata.checked, flatten: flattenPdf.checked },
+    ...batchOptions(),
     onProgress: async (completed, total) => {
       updateProgress(completed, total);
       if (completed % 5 === 0) await nextFrame();
@@ -485,22 +501,26 @@ async function streamToDisk(target: 'folder' | 'zip'): Promise<void> {
       if (next.value.type === 'failure') {
         failures.push(next.value.failure);
       } else {
-        const { filename, bytes } = next.value.document;
+        const { filename, bytes, email } = next.value.document;
         if (zipWriter) {
           // A generated .docx is already a ZIP and a PDF is largely
           // compressed, so entries are stored rather than deflated again.
           await zipWriter.add(filename, bytes, false);
+          // An email is base64 text, which does compress.
+          if (email) await zipWriter.add(email.filename, email.bytes, true);
         } else {
           await writeFileTo(destination!, filename, bytes);
+          if (email) await writeFileTo(destination!, email.filename, email.bytes);
         }
         written += 1;
+        if (email) emailsWritten += 1;
         bytesWritten += bytes.length;
       }
       next = await stream.next();
     }
 
     await zipWriter?.close();
-    showStreamResult(next.value, target, written, bytesWritten, failures);
+    showStreamResult(next.value, target, written, emailsWritten, bytesWritten, failures);
   } catch (error) {
     // Stop producing documents, and discard a half-written archive rather than
     // leaving something that looks like a complete set.
@@ -520,6 +540,7 @@ function showStreamResult(
   summary: BatchSummary,
   target: 'folder' | 'zip',
   written: number,
+  emailsWritten: number,
   bytesWritten: number,
   failures: readonly BatchFailure[],
 ): void {
@@ -527,7 +548,9 @@ function showStreamResult(
     el('p', {
       className: failures.length > 0 ? 'partial' : 'ok',
       text:
-        `${written} document${written === 1 ? '' : 's'} written ` +
+        `${written} document${written === 1 ? '' : 's'}` +
+        (emailsWritten > 0 ? ` and ${emailsWritten} email${emailsWritten === 1 ? '' : 's'}` : '') +
+        ' written ' +
         `${target === 'zip' ? 'to the ZIP' : 'to the folder'} (${formatBytes(bytesWritten)})` +
         (failures.length > 0 ? `, ${failures.length} row(s) failed` : ''),
     }),
@@ -537,7 +560,12 @@ function showStreamResult(
     nodes.push(warning(`No column matched: ${summary.unmatchedFields.join(', ')}`));
   }
 
-  nodes.push(...unsupportedNotice(summary.unsupported), ...shrunkNotice(summary.shrunkFields));
+  nodes.push(
+    ...unsupportedNotice(summary.unsupported),
+    ...shrunkNotice(summary.shrunkFields),
+    ...sharedAddressNotice(summary.sharedAddresses),
+    ...sendingHint(emailsWritten),
+  );
 
   if (failures.length > 0) {
     const list = el('ul', { className: 'failure-list' });
@@ -560,12 +588,7 @@ async function generate(): Promise<void> {
 
   try {
     const result = await runBatch(loadedTemplate.template, loadedData.records, {
-      missing: missingSelect.value as MissingValuePolicy,
-      outputFormat: outputFormat(),
-      treatEmptyAsMissing: emptyIsMissing.checked,
-      filenameTemplate: filenameInput.value.trim() || undefined,
-      docx: { scrubMetadata: scrubMetadata.checked },
-      pdf: { scrubMetadata: scrubMetadata.checked, flatten: flattenPdf.checked },
+      ...batchOptions(),
       onProgress: async (completed, total) => {
         updateProgress(completed, total);
         // Yield periodically so the page keeps painting during a long batch.
@@ -586,16 +609,24 @@ async function generate(): Promise<void> {
 function showResults(result: BatchResult): void {
   const nodes: Node[] = [];
 
+  const emails = result.documents.filter((document) => document.email !== undefined).length;
   nodes.push(
     el('p', {
       className: result.failures.length > 0 ? 'partial' : 'ok',
       text:
-        `${result.documents.length} document${result.documents.length === 1 ? '' : 's'} ready` +
+        `${result.documents.length} document${result.documents.length === 1 ? '' : 's'}` +
+        (emails > 0 ? ` and ${emails} email${emails === 1 ? '' : 's'}` : '') +
+        ' ready' +
         (result.failures.length > 0 ? `, ${result.failures.length} row(s) failed` : ''),
     }),
   );
 
-  nodes.push(...unsupportedNotice(result.unsupported), ...shrunkNotice(result.shrunkFields));
+  nodes.push(
+    ...unsupportedNotice(result.unsupported),
+    ...shrunkNotice(result.shrunkFields),
+    ...sharedAddressNotice(result.sharedAddresses),
+    ...sendingHint(emails),
+  );
 
   if (result.documents.length > 0) {
     const totalBytes = result.documents.reduce((sum, document) => sum + document.bytes.length, 0);
@@ -604,7 +635,10 @@ function showResults(result: BatchResult): void {
     const zipButton = el('button', { className: 'btn btn-primary', text: 'Download all as ZIP' });
     zipButton.addEventListener('click', () => {
       const archive = buildZip(
-        result.documents.map((document) => ({ name: document.filename, bytes: document.bytes })),
+        result.documents.flatMap((document) => [
+          { name: document.filename, bytes: document.bytes },
+          ...(document.email ? [{ name: document.email.filename, bytes: document.email.bytes }] : []),
+        ]),
       );
       downloadBytes(archive, 'doclyst-documents.zip');
     });
@@ -631,7 +665,15 @@ function showResults(result: BatchResult): void {
     for (const document of result.documents) {
       const link = el('button', { className: 'link', text: document.filename });
       link.addEventListener('click', () => downloadBytes(document.bytes, document.filename));
-      list.append(el('li', {}, [link]));
+      const item = el('li', {}, [link]);
+      const email = document.email;
+      if (email) {
+        const emailLink = el('button', { className: 'link', text: 'email' });
+        emailLink.addEventListener('click', () => downloadBytes(email.bytes, email.filename));
+        // Not `document.createTextNode`: `document` here is the generated one.
+        item.append(el('span', { text: ' · ' }), emailLink);
+      }
+      list.append(item);
     }
     nodes.push(list);
   }
@@ -683,7 +725,12 @@ function setBusy(busy: boolean): void {
 }
 
 function ready(): boolean {
-  return loadedTemplate !== undefined && (loadedData?.records.length ?? 0) > 0;
+  return (
+    loadedTemplate !== undefined &&
+    (loadedData?.records.length ?? 0) > 0 &&
+    // Emails asked for but no column chosen to address them from.
+    (!makeEmails.checked || emailColumn.value !== '')
+  );
 }
 
 function refresh(): void {
@@ -742,6 +789,304 @@ async function reportTemplateFit(): Promise<void> {
       ),
     );
   }
+}
+
+// --- email drafts --------------------------------------------------------
+
+/** The options every run uses, read from the form. */
+function batchOptions(): BatchOptions {
+  const email =
+    makeEmails.checked && emailColumn.value !== ''
+      ? {
+          to: emailColumn.value,
+          subject: emailSubject.value,
+          body: emailBody.value,
+          attachmentName: attachmentName.value,
+        }
+      : undefined;
+  return {
+    missing: missingSelect.value as MissingValuePolicy,
+    outputFormat: outputFormat(),
+    treatEmptyAsMissing: emptyIsMissing.checked,
+    filenameTemplate: filenameInput.value.trim() || undefined,
+    docx: { scrubMetadata: scrubMetadata.checked },
+    pdf: { scrubMetadata: scrubMetadata.checked, flatten: flattenPdf.checked },
+    ...(email ? { email } : {}),
+  };
+}
+
+makeEmails.addEventListener('change', () => {
+  emailFields.hidden = !makeEmails.checked;
+  checkEmails();
+  refresh();
+});
+
+emailColumn.addEventListener('change', () => {
+  checkEmails();
+  refresh();
+});
+
+/**
+ * Offer the data's columns as the address source, keeping the current choice
+ * if it still exists and otherwise picking the one that looks like an email.
+ */
+function populateEmailColumns(): void {
+  const previous = emailColumn.value;
+  clear(emailColumn);
+  emailColumn.append(el('option', { text: 'Choose a column', attrs: { value: '' } }));
+  const fields = loadedData?.fields ?? [];
+  for (const field of fields) {
+    emailColumn.append(el('option', { text: field, attrs: { value: field } }));
+  }
+  if (fields.includes(previous)) emailColumn.value = previous;
+  else emailColumn.value = fields.find((field) => /e-?mail/i.test(field)) ?? '';
+  checkEmails();
+}
+
+/**
+ * Check every address before anything is generated.
+ *
+ * Row numbers only: the addresses themselves are personal data and are never
+ * put on screen.
+ */
+function checkEmails(): void {
+  clear(emailCheck);
+  if (!makeEmails.checked || !loadedData) return;
+  if (emailColumn.value === '') {
+    emailCheck.append(warning('Choose the column that holds each person’s email address.'));
+    return;
+  }
+
+  const bad: number[] = [];
+  const seen = new Map<string, number[]>();
+  loadedData.records.forEach((record, index) => {
+    const checked = checkEmailAddress(String(record[emailColumn.value] ?? ''));
+    if (!checked.ok) {
+      bad.push(index + 1);
+      return;
+    }
+    const key = checked.address.toLowerCase();
+    seen.set(key, [...(seen.get(key) ?? []), index + 1]);
+  });
+
+  if (bad.length > 0) {
+    emailCheck.append(
+      warning(
+        `${bad.length === 1 ? 'Row' : 'Rows'} ${listRows(bad)}: the address is blank, or is not one valid email address. ${bad.length === 1 ? 'That row' : 'Those rows'} will fail until fixed.`,
+      ),
+    );
+  }
+  emailCheck.append(...sharedAddressNotice([...seen.values()].filter((rows) => rows.length > 1)));
+  if (emailCheck.childElementCount === 0) {
+    emailCheck.append(
+      el('p', {
+        className: 'ok',
+        text: `All ${loadedData.records.length} addresses look right, and no two rows share one.`,
+      }),
+    );
+  }
+}
+
+/** Warn about rows that share an address — usually a copy-paste slip. */
+function sharedAddressNotice(groups: readonly (readonly number[])[]): Node[] {
+  return groups.map((rows) =>
+    warning(
+      `Rows ${listRows(rows)} have the same email address. Check that each person gets their own letter.`,
+    ),
+  );
+}
+
+/** What to do with the email files, said once they exist. */
+function sendingHint(emails: number): Node[] {
+  if (emails === 0) return [];
+  return [
+    el('p', {
+      className: 'fields',
+      text: 'To send: double-click each .eml file. It opens in Outlook as a new email, addressed and with the document attached. Check it, then press Send.',
+    }),
+  ];
+}
+
+/** "3, 7 and 12", or the first ten and a count when the list is long. */
+function listRows(rows: readonly number[]): string {
+  const shown = rows.slice(0, 10).map(String);
+  if (rows.length > 10) return `${shown.join(', ')} and ${rows.length - 10} more`;
+  if (shown.length === 1) return shown[0] as string;
+  return `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`;
+}
+
+// --- checking signed letters -------------------------------------------
+
+let sentFiles: readonly File[] = [];
+let returnedFiles: readonly File[] = [];
+
+/** A drop zone that takes many files at once. */
+function enableMultiDropZone(zone: HTMLElement, input: HTMLInputElement): void {
+  zone.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    zone.classList.add('dragging');
+  });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragging'));
+  zone.addEventListener('drop', (event) => {
+    event.preventDefault();
+    zone.classList.remove('dragging');
+    const files = event.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    const transfer = new DataTransfer();
+    for (const file of Array.from(files)) transfer.items.add(file);
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('change'));
+  });
+}
+
+enableMultiDropZone(sentDrop, sentInput);
+enableMultiDropZone(returnedDrop, returnedInput);
+
+sentInput.addEventListener('change', () => {
+  sentFiles = pdfsFrom(sentInput);
+  markMultiZone(sentDrop, sentFiles.length, 'sent');
+  syncCheckButton();
+});
+
+returnedInput.addEventListener('change', () => {
+  returnedFiles = pdfsFrom(returnedInput);
+  markMultiZone(returnedDrop, returnedFiles.length, 'returned');
+  syncCheckButton();
+});
+
+function pdfsFrom(input: HTMLInputElement): File[] {
+  return Array.from(input.files ?? []).filter((file) => /\.pdf$/i.test(file.name));
+}
+
+function markMultiZone(zone: HTMLElement, count: number, which: 'sent' | 'returned'): void {
+  zone.classList.toggle('loaded', count > 0);
+  const text = zone.querySelector('.dz-text');
+  const meta = zone.querySelector('.dz-meta');
+  if (!text || !meta) return;
+  const label = which === 'sent' ? 'letter' : 'signed copy';
+  const plural = which === 'sent' ? 'letters' : 'signed copies';
+  if (count === 0) {
+    replaceChildren(text as HTMLElement, el('strong', { text: which === 'sent' ? 'Letters you sent' : 'Signed copies you got back' }));
+    meta.textContent = which === 'sent' ? 'PDFs from step 4 — choose or drop them all' : 'PDFs — choose or drop them all';
+    return;
+  }
+  replaceChildren(text as HTMLElement, el('strong', { text: `${count} ${count === 1 ? label : plural}` }));
+  meta.textContent = 'Click or drop to replace';
+}
+
+function syncCheckButton(): void {
+  checkButton.disabled = sentFiles.length === 0 || returnedFiles.length === 0;
+}
+
+checkButton.addEventListener('click', () => {
+  void runCheck();
+});
+
+async function runCheck(): Promise<void> {
+  checkButton.disabled = true;
+  checkButton.textContent = 'Checking…';
+  replaceChildren(checkResults, el('p', { className: 'fields', text: 'Reading the letters…' }));
+  try {
+    const read = async (files: readonly File[]) =>
+      Promise.all(files.map(async (file) => ({ name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) })));
+    const report = await checkReturnedLetters(await read(sentFiles), await read(returnedFiles), {
+      onProgress: async (completed, total) => {
+        if (completed % 5 === 0) {
+          replaceChildren(checkResults, el('p', { className: 'fields', text: `Reading ${completed} of ${total}…` }));
+          await nextFrame();
+        }
+      },
+    });
+    showCheck(report);
+  } catch (error) {
+    replaceChildren(checkResults, warning(describeError(error)));
+  } finally {
+    checkButton.textContent = 'Check signed letters';
+    syncCheckButton();
+  }
+}
+
+/** Most serious first, so the letters that need attention are at the top. */
+const STATUS_ORDER: readonly ReturnedStatus[] = ['changed', 'unreadable', 'unmatched', 'review', 'unsigned', 'signed'];
+
+const STATUS_LABEL: Readonly<Record<ReturnedStatus, string>> = {
+  changed: 'Changed — do not accept as it is',
+  unreadable: 'Cannot be checked',
+  unmatched: 'No matching letter',
+  review: 'Check by eye',
+  unsigned: 'Not signed',
+  signed: 'Signed, nothing changed',
+};
+
+/** The same, as counted in the summary line. */
+const STATUS_SHORT: Readonly<Record<ReturnedStatus, string>> = {
+  changed: 'changed',
+  unreadable: 'cannot be checked',
+  unmatched: 'unmatched',
+  review: 'to check by eye',
+  unsigned: 'not signed',
+  signed: 'signed',
+};
+
+function showCheck(report: ReturnedCheck): void {
+  const counts = new Map<ReturnedStatus, number>();
+  for (const item of report.returned) counts.set(item.status, (counts.get(item.status) ?? 0) + 1);
+
+  const parts = STATUS_ORDER.filter((status) => counts.has(status)).map(
+    (status) => `${counts.get(status)} ${STATUS_SHORT[status]}`,
+  );
+  const allGood = (counts.get('signed') ?? 0) === report.returned.length;
+  const nodes: Node[] = [
+    el('p', { className: allGood ? 'ok' : 'partial', text: `Checked ${report.returned.length}: ${parts.join(' · ')}` }),
+  ];
+
+  if (report.unreadableSent.length > 0) {
+    nodes.push(
+      warning(
+        `These sent letters could not be read, so nothing can be matched to them: ${report.unreadableSent.join(', ')}.`,
+      ),
+    );
+  }
+
+  const list = el('ul', { className: 'check-list' });
+  const sorted = [...report.returned].sort(
+    (a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status),
+  );
+  for (const item of sorted) list.append(checkItem(item));
+  nodes.push(list);
+
+  if (report.notReturned.length > 0) {
+    const details = el('details', { className: 'not-returned' }, [
+      el('summary', {
+        text: `${report.notReturned.length} letter${report.notReturned.length === 1 ? '' : 's'} not back yet`,
+      }),
+      el('p', { className: 'fields', text: report.notReturned.join(', ') }),
+    ]);
+    nodes.push(details);
+  }
+
+  replaceChildren(checkResults, ...nodes);
+}
+
+function checkItem(item: ReturnedLetterReport): HTMLElement {
+  const head = el('div', { className: 'check-head' }, [
+    el('span', { className: `badge ${item.status}`, text: STATUS_LABEL[item.status] }),
+    el('span', { className: 'check-file', text: item.file }),
+  ]);
+  if (item.letter !== undefined && item.letter !== item.file) {
+    head.append(el('span', { className: 'fields', text: `matches ${item.letter}` }));
+  }
+  const node = el('li', { className: `check-item ${item.status}` }, [head]);
+  for (const finding of item.findings) {
+    node.append(el('p', { className: `check-finding${item.status === 'changed' ? ' bad' : ''}`, text: finding }));
+  }
+  if (item.status === 'unsigned') {
+    node.append(el('p', { className: 'check-finding', text: 'Nothing has been added to it. It may have been sent back without signing.' }));
+  }
+  for (const addition of item.additions) {
+    node.append(el('p', { className: 'check-addition', text: `Added: ${addition}` }));
+  }
+  return node;
 }
 
 // --- presentation helpers ----------------------------------------------

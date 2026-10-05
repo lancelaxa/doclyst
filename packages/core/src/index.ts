@@ -124,6 +124,7 @@ export {
   type BatchSummary,
   type OutputFormat,
   type GeneratedDocument,
+  type GeneratedEmail,
   type Template,
   type TemplateKind,
 } from './batch/run.js';
@@ -131,8 +132,27 @@ export {
 export { buildZip, type ZipEntry } from './output/zip.js';
 
 export {
+  checkEmailAddress,
+  composeEmailDraft,
+  contentTypeFor,
+  fillText,
+  type EmailAttachment,
+  type EmailDraft,
+  type EmailDraftOptions,
+} from './output/email.js';
+
+export {
   describeValue,
   redactRecord,
   redactForLog,
   isSensitiveFieldName,
 } from './privacy/redact.js';
+
+export {
+  checkReturnedLetters,
+  type CheckReturnedOptions,
+  type LetterFile,
+  type ReturnedCheck,
+  type ReturnedLetterReport,
+  type ReturnedStatus,
+} from './verify/returned.js';
