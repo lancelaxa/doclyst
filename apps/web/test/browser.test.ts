@@ -1018,7 +1018,7 @@ Priya Nair,6100,priya.nair@example.com
     it('picks the email column and confirms the addresses before anything is made', async () => {
       const { page } = await openPage();
       await loadWithEmails(page);
-      expect(await page.inputValue('#email-column')).toBe('Email');
+      await expect.poll(() => page.inputValue('#email-column')).toBe('Email');
       await expect.poll(() => page.textContent('#email-check')).toContain('All 3 addresses look right');
       await page.close();
     });
@@ -1104,8 +1104,9 @@ Wei Lun Tan,weilun@example.com,,S0000002B,Daniel Tan
     it('makes an upload spreadsheet with only what the letter uses', async () => {
       const { page, requests } = await openPage();
       await load(page, ['FULL_NAME', 'BASIC_SALARY', 'Sign here;type=signature']);
-      expect(await page.inputValue('#docuseal-name')).toBe('Full Name');
-      expect(await page.inputValue('#docuseal-email')).toBe('Email');
+      // The spreadsheet is read asynchronously; wait for the columns to land.
+      await expect.poll(() => page.inputValue('#docuseal-name')).toBe('Full Name');
+      await expect.poll(() => page.inputValue('#docuseal-email')).toBe('Email');
 
       await page.click('#make-docuseal');
       await expect.poll(() => page.textContent('#docuseal-results')).toContain('1 candidate ready for DocuSeal, 1 row(s) left out');
@@ -1131,6 +1132,7 @@ Wei Lun Tan,weilun@example.com,,S0000002B,Daniel Tan
     it('says when the template has nowhere to sign', async () => {
       const { page } = await openPage();
       await load(page, ['FULL_NAME']);
+      await expect.poll(() => page.isDisabled('#make-docuseal')).toBe(false);
       await page.click('#make-docuseal');
       await expect.poll(() => page.textContent('#docuseal-results')).toContain('This template has nowhere to sign.');
       await page.close();
