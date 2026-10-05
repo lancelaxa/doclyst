@@ -5,6 +5,11 @@
 # Only the static app is published. No data, template or spreadsheet is
 # involved: the page does all its work in the visitor's browser, and its
 # Content-Security-Policy blocks it from making network requests at all.
+#
+# Every branch is built and tested, but only `main` is published. Working
+# branches used to deploy too, which put unreviewed code on the live page the
+# moment it was pushed — and, since the guide tells people to download the
+# app from "the most recent run", into the single-file copy as well.
 name: Build and publish the app
 
 on:
@@ -15,8 +20,10 @@ on:
 permissions:
   contents: read
 
+# Grouped per branch, so a push to a working branch can never cancel a
+# deployment of main that is already under way.
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -48,6 +55,7 @@ jobs:
 
       # Downloadable from the run page in a browser — no terminal needed.
       - name: Upload the single-file app
+        if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: doclyst-single-file
@@ -55,6 +63,7 @@ jobs:
           if-no-files-found: error
 
       - name: Package the site for Pages
+        if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
           path: apps/web/dist
@@ -84,6 +93,7 @@ jobs:
   # artifacts ready to download.
   deploy:
     needs: build
+    if: github.ref == 'refs/heads/main'
     continue-on-error: true
     runs-on: ubuntu-latest
     permissions:

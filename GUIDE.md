@@ -32,7 +32,9 @@ This is the simplest, and the most private: there is no server involved at any
 point, and it works with no internet connection at all.
 
 1. Go to the repository on GitHub and open the **Actions** tab.
-2. Click the most recent **“Build and publish the app”** run.
+2. Click the most recent **“Build and publish the app”** run on the **main**
+   branch. Runs on other branches are tests of unfinished work and have no
+   download.
 3. Scroll to **Artifacts** and download **`doclyst-single-file`**.
 4. Unzip it. You get one file: **`doclyst.html`**.
 5. **Double-click it.** It opens in your browser and is ready to use.
@@ -322,7 +324,7 @@ attention are listed first.
 | **Not signed** | Nothing has been added | Ask them to sign it |
 | **Check by eye** | Nothing is missing, but something added sits over the original text, or two files match the same letter | Open it and look at the place named — usually a signature running into the printed name |
 | **Changed — do not accept as it is** | Something you sent is missing, moved or different, text has been covered over, or a page has been added or taken away | Do not accept it. Send the letter again |
-| **Cannot be checked** | A scan or photo of a printed letter, or a password-protected file | Compare it with the original by eye, or ask for the PDF itself |
+| **Cannot be checked** | A scan or photo of a printed letter, a password-protected file, or a file far larger or more complicated than a letter should be | Compare it with the original by eye, or ask for the PDF itself |
 | **No matching letter** | It is not one of the letters you dropped in on the left | Check you added the right letters, or that it is the right file |
 
 Underneath is a count of **letters not back yet**, which doubles as your list
@@ -339,6 +341,13 @@ what the text says. Open the letter to see it.
   legal matters. This is not legal advice.
 - **It cannot read a scan or a photo**, because there is no text in it to
   compare. Those are flagged, never passed.
+- **It is not forensic.** It catches accidental changes and the usual ways of
+  altering a PDF — covering text up, hiding it, cropping the page, typing over
+  a figure. Someone expert enough with PDF files could still make one it
+  misses. The letter you sent is the record of what was offered: keep it.
+- **Always read what was added.** A copy marked *signed* lists every addition
+  and where it is. A typed date beside the date line is normal; a typed
+  sentence somewhere else is worth a look.
 - **It does not chase, remind or track.** It checks what you give it, when you
   give it.
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFRawStream, PDFString, decodePDFRawStream } from 'pdf-lib';
 import { checkPdfTemplateFit, fieldNameToKey, fillPdf, readPdfFields } from '../src/pdf/fill.js';
 import { DoclystError } from '../src/errors.js';
 import { buildPdfForm } from './helpers/fixtures.js';
@@ -159,6 +159,82 @@ describe('fillPdf', () => {
       const result = await fillPdf(pdf, echo, { scrubMetadata: false });
       const filled = await inspect(result.bytes);
       expect(filled.getProducer()).toBeTruthy();
+    });
+
+    describe('beyond the standard fields', () => {
+      /** A template carrying the author's traces the way real ones do. */
+      async function authoredTemplate(): Promise<Uint8Array> {
+        const doc = await PDFDocument.load(await buildPdfForm([{ name: 'NAME' }]));
+        const { context } = doc;
+        const xmp =
+          '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">' +
+          '<rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>Template Author</dc:creator>' +
+          '</rdf:Description></rdf:RDF></x:xmpmeta>';
+        doc.catalog.set(PDFName.of('Metadata'), context.register(context.stream(xmp, { Type: 'Metadata', Subtype: 'XML' })));
+        const info = context.lookup(context.trailerInfo.Info) as unknown as { set(k: PDFName, v: PDFString): void };
+        info.set(PDFName.of('Company'), PDFString.of('Example Secret Department'));
+        const note = context.register(
+          context.obj({ Type: 'Annot', Subtype: 'Text', Rect: [10, 10, 30, 30], T: PDFString.of('Template Author'), Contents: PDFString.of('Check the salary band') }),
+        );
+        const link = context.register(
+          context.obj({ Type: 'Annot', Subtype: 'Link', Rect: [40, 10, 90, 30], T: PDFString.of('Template Author'), A: { S: 'URI', URI: PDFString.of('https://example.com') } }),
+        );
+        const page = doc.getPage(0);
+        const annots = page.node.Annots();
+        page.node.set(PDFName.of('Annots'), context.obj([...(annots ? annots.asArray() : []), note, link]));
+        doc.catalog.set(PDFName.of('OpenAction'), context.obj({ S: 'JavaScript', JS: PDFString.of('app.alert(1)') }));
+        doc.catalog.set(PDFName.of('Names'), context.obj({ JavaScript: { Names: [] }, EmbeddedFiles: { Names: [] } }));
+        return doc.save({ useObjectStreams: false });
+      }
+
+      /** Every string in the file, with each compressed stream inflated. */
+      function everything(bytes: Uint8Array): Promise<string> {
+        return PDFDocument.load(bytes, { updateMetadata: false }).then((doc) => {
+          let text = Buffer.from(bytes).toString('latin1');
+          for (const [, object] of doc.context.enumerateIndirectObjects()) {
+            if (object instanceof PDFRawStream) {
+              try {
+                text += Buffer.from(decodePDFRawStream(object).decode()).toString('latin1');
+              } catch {
+                // Not every stream decodes; the raw bytes are already included.
+              }
+            }
+          }
+          return text;
+        });
+      }
+
+      it('removes XMP metadata, extra info fields and review notes, and leaves no copy behind', async () => {
+        const result = await fillPdf(await authoredTemplate(), echo);
+        const filled = await inspect(result.bytes);
+        expect(filled.catalog.has(PDFName.of('Metadata'))).toBe(false);
+        const text = await everything(result.bytes);
+        // Searched across every object, not just the ones still referenced:
+        // detaching an object without deleting it leaves it in the file.
+        expect(text).not.toContain('Template Author');
+        expect(text).not.toContain('Example Secret Department');
+        expect(text).not.toContain('Check the salary band');
+      });
+
+      it('keeps links, minus who made them', async () => {
+        const result = await fillPdf(await authoredTemplate(), echo, { flatten: true });
+        const filled = await inspect(result.bytes);
+        const annots = filled.getPage(0).node.Annots();
+        const subtypes = (annots?.asArray() ?? []).map((ref) =>
+          String((filled.context.lookup(ref) as unknown as { get(k: PDFName): unknown }).get(PDFName.of('Subtype'))),
+        );
+        expect(subtypes).toEqual(['/Link']);
+      });
+
+      it('removes scripts, open actions and attachments, even with scrubbing off', async () => {
+        const result = await fillPdf(await authoredTemplate(), echo, { scrubMetadata: false });
+        const filled = await inspect(result.bytes);
+        expect(filled.catalog.has(PDFName.of('OpenAction'))).toBe(false);
+        const names = filled.catalog.lookup(PDFName.of('Names')) as unknown as { has(k: PDFName): boolean };
+        expect(names.has(PDFName.of('JavaScript'))).toBe(false);
+        expect(names.has(PDFName.of('EmbeddedFiles'))).toBe(false);
+        expect(await everything(result.bytes)).not.toContain('app.alert');
+      });
     });
   });
 

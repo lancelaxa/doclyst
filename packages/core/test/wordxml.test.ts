@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { replacePlaceholdersInXml, extractTextFromXml } from '../src/docx/wordxml.js';
+import { decodeXmlText } from '../src/docx/xml.js';
 import { para, run, splitRuns } from './helpers/fixtures.js';
 
 const upper = (key: string): string => `<${key}>`;
@@ -153,5 +154,18 @@ describe('replacePlaceholdersInXml', () => {
     const result = replacePlaceholdersInXml(xml, echo);
     expect(result.replaced).toBe(0);
     expect(result.xml).toBe(xml);
+  });
+});
+
+describe('decodeXmlText on hostile references', () => {
+  it('leaves references to characters XML forbids as literal text', () => {
+    // Decoded, these would make a .docx Word refuses to open.
+    expect(decodeXmlText('a&#xD800;b&#xFFFF;c&#1;d')).toBe('a&#xD800;b&#xFFFF;c&#1;d');
+    expect(decodeXmlText('tab&#9;ok')).toBe('tab\tok');
+  });
+
+  it('does not decode an entity named after an object property', () => {
+    expect(decodeXmlText('a&constructor;b&toString;c')).toBe('a&constructor;b&toString;c');
+    expect(decodeXmlText('&amp;&lt;')).toBe('&<');
   });
 });

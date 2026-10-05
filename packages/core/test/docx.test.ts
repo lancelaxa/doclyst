@@ -129,6 +129,79 @@ describe('fillDocx', () => {
       const entries = unzipSync(fillDocx(docx, echo, { scrubMetadata: false }).bytes);
       expect(strFromU8(entries['docProps/core.xml']!)).toContain('Template Author');
     });
+
+    describe('beyond the core properties', () => {
+      const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+      const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+      const commented = () =>
+        buildDocx(
+          para(
+            '<w:commentRangeStart w:id="0"/>',
+            '<w:ins w:id="1" w:author="Template Author" w:date="2026-01-01T00:00:00Z">',
+            run('Dear {{NAME}}'),
+            '</w:ins>',
+            '<w:commentRangeEnd w:id="0"/>',
+            '<w:r><w:commentReference w:id="0"/></w:r>',
+          ),
+          {
+            extraParts: {
+              'word/comments.xml': `<w:comments ${W}><w:comment w:id="0" w:author="Template Author" w:initials="TA"><w:p><w:r><w:t>Is this salary band right?</w:t></w:r></w:p></w:comment></w:comments>`,
+              'word/people.xml': '<w15:people><w15:person w15:author="Template Author"><w15:presenceInfo w15:userId="author@example.com"/></w15:person></w15:people>',
+              'docProps/custom.xml': '<Properties><property name="Owner"><vt:lpwstr>Template Author</vt:lpwstr></property></Properties>',
+              'word/settings.xml': `<w:settings ${W}><w:attachedTemplate r:id="rId1"/><w:zoom w:percent="100"/></w:settings>`,
+              'word/_rels/settings.xml.rels': `<Relationships><Relationship Id="rId1" Type="${REL}/attachedTemplate" Target="file:///C:/Users/tauthor/Templates/HR.dotm" TargetMode="External"/></Relationships>`,
+              'word/_rels/document.xml.rels': `<Relationships><Relationship Id="rId5" Type="${REL}/comments" Target="comments.xml"/><Relationship Id="rId6" Type="http://schemas.microsoft.com/office/2011/relationships/people" Target="people.xml"/><Relationship Id="rId7" Type="${REL}/styles" Target="styles.xml"/></Relationships>`,
+              '[Content_Types].xml': '<Types><Override PartName="/word/document.xml" ContentType="main"/><Override PartName="/word/comments.xml" ContentType="comments"/><Override PartName="/docProps/custom.xml" ContentType="custom"/></Types>',
+            },
+          },
+        );
+
+      it('drops review comments, their authors and the people list', () => {
+        const entries = unzipSync(fillDocx(commented(), echo).bytes);
+        for (const part of ['word/comments.xml', 'word/people.xml', 'docProps/custom.xml']) {
+          expect(entries[part]).toBeUndefined();
+        }
+        const everything = Object.values(entries).map((bytes) => strFromU8(bytes)).join('\n');
+        expect(everything).not.toContain('Template Author');
+        expect(everything).not.toContain('salary band');
+        expect(everything).not.toContain('author@example.com');
+      });
+
+      it('keeps the package consistent once those parts are gone', () => {
+        const entries = unzipSync(fillDocx(commented(), echo).bytes);
+        const body = strFromU8(entries['word/document.xml']!);
+        const rels = strFromU8(entries['word/_rels/document.xml.rels']!);
+        const types = strFromU8(entries['[Content_Types].xml']!);
+        // Nothing may still point at a part that is no longer there.
+        expect(body).not.toMatch(/commentRangeStart|commentRangeEnd|commentReference/);
+        expect(rels).not.toContain('comments.xml');
+        expect(rels).not.toContain('people.xml');
+        expect(rels).toContain('styles.xml');
+        expect(types).not.toContain('/word/comments.xml');
+        expect(types).not.toContain('/docProps/custom.xml');
+        expect(types).toContain('/word/document.xml');
+        expect(textOf(fillDocx(commented(), echo).bytes)).toBe('Dear <NAME>');
+      });
+
+      it('blanks the names and times on tracked changes', () => {
+        const body = strFromU8(unzipSync(fillDocx(commented(), echo).bytes)['word/document.xml']!);
+        expect(body).toContain('<w:ins w:id="1" w:author="">');
+        expect(body).not.toContain('2026-01-01');
+      });
+
+      it("drops the path to the template on the author's machine", () => {
+        const entries = unzipSync(fillDocx(commented(), echo).bytes);
+        expect(strFromU8(entries['word/settings.xml']!)).not.toContain('attachedTemplate');
+        expect(strFromU8(entries['word/settings.xml']!)).toContain('w:zoom');
+        expect(strFromU8(entries['word/_rels/settings.xml.rels']!)).not.toContain('tauthor');
+      });
+
+      it('keeps all of it when scrubbing is turned off', () => {
+        const entries = unzipSync(fillDocx(commented(), echo, { scrubMetadata: false }).bytes);
+        expect(entries['word/comments.xml']).toBeDefined();
+        expect(strFromU8(entries['word/document.xml']!)).toContain('Template Author');
+      });
+    });
   });
 
   describe('malformed input', () => {

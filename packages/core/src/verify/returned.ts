@@ -8,13 +8,17 @@ import {
   PDFRef,
   decodePDFRawStream,
 } from 'pdf-lib';
+import { Unzlib } from 'fflate';
 import {
   IDENTITY,
   multiply,
   readGlyphs,
   readResourceFonts,
   type Box,
+  type ExtGStateInfo,
+  type GlyphAppearance,
   type Matrix,
+  type PaintInfo,
 } from '../pdf/content.js';
 
 /**
@@ -140,7 +144,9 @@ export async function checkReturnedLetters(
         findings: [
           error instanceof EncryptedError
             ? 'It is password-protected, so it cannot be checked. Ask for a copy without a password.'
-            : 'It could not be opened as a PDF.',
+            : error instanceof TooComplexError
+              ? 'It is far larger or more complicated than a signed letter should be, so it was not checked. Compare it with the original by eye.'
+              : 'It could not be opened as a PDF.',
         ],
         additions: [],
       });
@@ -242,42 +248,97 @@ interface TextMark {
   readonly page: number;
   readonly text: string;
   readonly box: Box;
+  /** Whether the character can actually be seen. */
+  readonly shown: boolean;
+  /** Lightness of its paint: 0 black, 1 white. */
+  readonly lightness: number;
 }
 
 interface Drawing {
   readonly page: number;
   readonly kind: 'fill' | 'stroke' | 'image' | 'annotation';
-  /** Undefined when the extent cannot be known, as for a shading. */
+  /** Undefined when the extent cannot be known, as for an unclipped shading. */
   readonly box: Box | undefined;
-  /** For a fill, how light it is: 0 black, 1 white. */
-  readonly lightness?: number;
+  /** How it was painted; absent for an annotation drawn by the viewer. */
+  readonly info?: PaintInfo;
 }
 
-interface PageSize {
+interface PageGeometry {
   readonly width: number;
   readonly height: number;
+  /** The visible area. Shrinking it hides whatever falls outside. */
+  readonly crop: Box;
+  readonly rotation: number;
+  readonly userUnit: number;
 }
 
 interface Inventory {
-  readonly pages: readonly PageSize[];
+  readonly pages: readonly PageGeometry[];
   readonly text: readonly TextMark[];
   readonly drawings: readonly Drawing[];
+  /**
+   * Whether the document has optional content — layers a viewer can show or
+   * hide. Whether a given layer is on is not modelled here, so their presence
+   * alone is reported.
+   */
+  readonly layers: boolean;
 }
 
 class EncryptedError extends Error {}
 
-/** Deepest nesting of form XObjects followed before giving up. */
+/**
+ * Raised when a file would take more work to check than any real letter needs.
+ *
+ * Everything returned is supplied by the person who signed it, so it is treated
+ * as hostile. A 2 KB file that draws a form which draws itself ten times, seven
+ * levels deep, asks for ten million visits; a 600 KB stream can inflate to a
+ * gigabyte. Either would freeze the page. Real letters sit far inside every
+ * limit below.
+ */
+class TooComplexError extends Error {}
+
+/** Largest returned file accepted. A signed letter is rarely over a few MB. */
+const MAX_FILE_BYTES = 50 * 1024 * 1024;
+/** Total decompressed bytes allowed across one file, including re-visits. */
+const MAX_DECODED_BYTES = 64 * 1024 * 1024;
+/** Total form XObjects drawn across one file, counting every repeat. */
+const MAX_FORM_DRAWS = 5_000;
+/** Characters, shapes and images recorded across one file. */
+const MAX_MARKS = 200_000;
+/** Deepest nesting of form XObjects followed. */
 const MAX_FORM_DEPTH = 8;
+/** Encoded size up to which a stream with an unusual filter is decoded. */
+const MAX_OTHER_FILTER_BYTES = 64 * 1024;
+
+/** Work done so far on one file, checked against the limits above. */
+class Budget {
+  decoded = 0;
+  formDraws = 0;
+  marks = 0;
+
+  charge(field: 'decoded' | 'formDraws' | 'marks', amount: number): void {
+    this[field] += amount;
+    const limit = field === 'decoded' ? MAX_DECODED_BYTES : field === 'formDraws' ? MAX_FORM_DRAWS : MAX_MARKS;
+    if (this[field] > limit) throw new TooComplexError();
+  }
+}
 
 /**
  * Read everything a document draws: each character, each painted shape, each
- * image, and each visible annotation, with where it sits on its page.
+ * image, and each visible annotation, with where it sits on its page and
+ * whether it can be seen.
  *
  * Form XObjects are followed, which matters more than it might seem: a
  * flattened form field is drawn from one, so the very values a letter was
  * filled with — the name and the salary — live there and nowhere else.
  */
 async function readInventory(bytes: Uint8Array): Promise<Inventory> {
+  if (bytes.length > MAX_FILE_BYTES) throw new TooComplexError();
+  const budget = new Budget();
+  // Checked before the PDF library sees the file, because loading it inflates
+  // object streams with no limit of its own.
+  preflightCompressedStreams(bytes);
+
   let document: PDFDocument;
   try {
     document = await PDFDocument.load(bytes, { updateMetadata: false });
@@ -286,22 +347,41 @@ async function readInventory(bytes: Uint8Array): Promise<Inventory> {
     throw error;
   }
 
-  const pages: PageSize[] = [];
+  const pages: PageGeometry[] = [];
   const text: TextMark[] = [];
   const drawings: Drawing[] = [];
 
   document.getPages().forEach((page, pageIndex) => {
     const pageNumber = pageIndex + 1;
     const { width, height } = page.getSize();
-    pages.push({ width, height });
+    const crop = page.getCropBox();
+    const userUnit = page.node.lookup(PDFName.of('UserUnit'));
+    pages.push({
+      width,
+      height,
+      crop: { x0: crop.x, y0: crop.y, x1: crop.x + crop.width, y1: crop.y + crop.height },
+      rotation: ((page.getRotation().angle % 360) + 360) % 360,
+      userUnit: userUnit instanceof PDFNumber ? userUnit.asNumber() : 1,
+    });
 
-    const visit = (content: string, resources: PDFDict | undefined, ctm: Matrix, depth: number, seen: Set<PDFRef | PDFRawStream>): void => {
+    const visit = (
+      content: string,
+      resources: PDFDict | undefined,
+      ctm: Matrix,
+      inherit: GlyphAppearance | undefined,
+      depth: number,
+      seen: Set<PDFRef | PDFRawStream>,
+    ): void => {
       const fonts = readResourceFonts(resources);
       const glyphs = readGlyphs(content, fonts, {
         ctm,
-        onPaint: (box, kind, lightness) =>
-          drawings.push(kind === 'fill' ? { page: pageNumber, kind, box, lightness } : { page: pageNumber, kind, box }),
-        onXObject: (name, at) => {
+        ...(inherit ? { inherit } : {}),
+        onPaint: (box, kind, info) => {
+          budget.charge('marks', 1);
+          drawings.push({ page: pageNumber, kind, box, info });
+        },
+        onExtGState: (name) => readExtGState(resources, name),
+        onXObject: (name, at, appearance) => {
           const xobjects = resources?.lookup(PDFName.of('XObject'));
           if (!(xobjects instanceof PDFDict)) return;
           const ref = xobjects.get(PDFName.of(name));
@@ -312,38 +392,46 @@ async function readInventory(bytes: Uint8Array): Promise<Inventory> {
 
           const subtype = stream.dict.lookup(PDFName.of('Subtype'));
           if (subtype === PDFName.of('Image')) {
-            drawings.push({ page: pageNumber, kind: 'image', box: transformBox({ x0: 0, y0: 0, x1: 1, y1: 1 }, at) });
+            budget.charge('marks', 1);
+            drawings.push({
+              page: pageNumber,
+              kind: 'image',
+              box: transformBox({ x0: 0, y0: 0, x1: 1, y1: 1 }, at),
+              info: { lightness: 0, alpha: appearance.alpha, softMask: appearance.softMask, rectangles: false, clip: appearance.clip },
+            });
             return;
           }
-          if (subtype !== PDFName.of('Form') || depth >= MAX_FORM_DEPTH) return;
+          if (subtype !== PDFName.of('Form')) return;
+          if (depth >= MAX_FORM_DEPTH) throw new TooComplexError();
+          budget.charge('formDraws', 1);
 
-          let inner: string;
-          try {
-            inner = latin1(decodePDFRawStream(stream).decode());
-          } catch {
-            return;
-          }
+          const inner = decodeStream(stream, budget);
+          if (inner === undefined) return;
           const matrix = readMatrix(stream.dict.lookup(PDFName.of('Matrix')));
           const own = stream.dict.lookup(PDFName.of('Resources'));
           const next = new Set(seen);
           next.add(key);
-          visit(inner, own instanceof PDFDict ? own : resources, multiply(matrix, at), depth + 1, next);
+          visit(inner, own instanceof PDFDict ? own : resources, multiply(matrix, at), appearance, depth + 1, next);
         },
       });
 
+      budget.charge('marks', glyphs.length);
       for (const glyph of glyphs) {
         if (glyph.text.trim() === '') continue;
         const left = Math.min(glyph.x, glyph.x + glyph.width);
         const right = Math.max(glyph.x, glyph.x + glyph.width);
+        const box = { x0: left, y0: glyph.y - glyph.size * 0.2, x1: right, y1: glyph.y + glyph.size * 0.8 };
         text.push({
           page: pageNumber,
           text: glyph.text,
-          box: { x0: left, y0: glyph.y - glyph.size * 0.2, x1: right, y1: glyph.y + glyph.size * 0.8 },
+          box,
+          shown: isShown(glyph.appearance, box),
+          lightness: glyph.appearance.lightness,
         });
       }
     };
 
-    visit(pageContent(page.node.Contents()), page.node.Resources(), IDENTITY, 0, new Set());
+    visit(pageContent(page.node.Contents(), budget), page.node.Resources(), IDENTITY, undefined, 0, new Set());
 
     const annotations = page.node.Annots();
     if (annotations instanceof PDFArray) {
@@ -359,33 +447,71 @@ async function readInventory(bytes: Uint8Array): Promise<Inventory> {
         if (flagValue & (2 | 32)) continue; // Hidden, NoView
         const rect = readBox(annotation.lookup(PDFName.of('Rect')));
         if (rect === undefined) continue;
+        budget.charge('marks', 1);
 
         // What an annotation shows is its appearance stream, so that is what
         // is read: a white box drawn by a text annotation is a white box, and
         // a signature is the strokes it is made of rather than the generous
         // rectangle around them, which would reach into the text nearby.
         const appearance = normalAppearance(annotation);
-        if (appearance === undefined) {
-          drawings.push({ page: pageNumber, kind: 'annotation', box: rect });
-          continue;
-        }
-        let inner: string;
-        try {
-          inner = latin1(decodePDFRawStream(appearance).decode());
-        } catch {
+        const inner = appearance === undefined ? undefined : decodeStream(appearance, budget);
+        if (appearance === undefined || inner === undefined) {
           drawings.push({ page: pageNumber, kind: 'annotation', box: rect });
           continue;
         }
         const own = appearance.dict.lookup(PDFName.of('Resources'));
-        visit(inner, own instanceof PDFDict ? own : page.node.Resources(), appearanceMatrix(appearance, rect), 1, new Set([appearance]));
+        visit(inner, own instanceof PDFDict ? own : page.node.Resources(), appearanceMatrix(appearance, rect), undefined, 1, new Set([appearance]));
       }
     }
   });
 
-  return { pages, text, drawings };
+  return { pages, text, drawings, layers: document.catalog.has(PDFName.of('OCProperties')) };
 }
 
-function pageContent(contents: unknown): string {
+/**
+ * Whether a glyph painted this way can be seen.
+ *
+ * Invisible render modes, near-zero opacity, a soft mask (whose effect is not
+ * worked out here, so it is not trusted), and a clip that leaves less than
+ * half of the glyph all count as not shown.
+ */
+function isShown(appearance: GlyphAppearance, box: Box): boolean {
+  if (appearance.renderMode === 3 || appearance.renderMode === 7) return false;
+  if (appearance.alpha < 0.5 || appearance.softMask) return false;
+  if (appearance.clip !== undefined) {
+    const area = (box.x1 - box.x0) * (box.y1 - box.y0);
+    if (area > 0 && overlapArea(box, appearance.clip) / area < 0.5) return false;
+  }
+  return true;
+}
+
+function overlapArea(a: Box, b: Box): number {
+  const width = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+  const height = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+  return width > 0 && height > 0 ? width * height : 0;
+}
+
+/** Opacity and soft mask of a named graphics state, from the resources. */
+function readExtGState(resources: PDFDict | undefined, name: string): ExtGStateInfo | undefined {
+  const states = resources?.lookup(PDFName.of('ExtGState'));
+  if (!(states instanceof PDFDict)) return undefined;
+  const state = states.lookup(PDFName.of(name));
+  if (!(state instanceof PDFDict)) return undefined;
+  const number = (key: string): number | undefined => {
+    const value = state.lookup(PDFName.of(key));
+    return value instanceof PDFNumber ? value.asNumber() : undefined;
+  };
+  const mask = state.lookup(PDFName.of('SMask'));
+  const info: { fillAlpha?: number; strokeAlpha?: number; softMask?: boolean } = {};
+  const fill = number('ca');
+  const stroke = number('CA');
+  if (fill !== undefined) info.fillAlpha = fill;
+  if (stroke !== undefined) info.strokeAlpha = stroke;
+  if (mask !== undefined) info.softMask = mask !== PDFName.of('None');
+  return info;
+}
+
+function pageContent(contents: unknown, budget: Budget): string {
   const streams: PDFRawStream[] = [];
   if (contents instanceof PDFArray) {
     for (let i = 0; i < contents.size(); i += 1) {
@@ -395,15 +521,121 @@ function pageContent(contents: unknown): string {
   } else if (contents instanceof PDFRawStream) {
     streams.push(contents);
   }
-  return streams
-    .map((stream) => {
-      try {
-        return latin1(decodePDFRawStream(stream).decode());
-      } catch {
-        return '';
-      }
-    })
-    .join('\n');
+  return streams.map((stream) => decodeStream(stream, budget) ?? '').join('\n');
+}
+
+/**
+ * Decode a stream within the file's budget.
+ *
+ * Flate — what every word processor, PDF printer and signing app writes — is
+ * inflated here, incrementally, stopping the moment the budget is spent.
+ * Anything else is handed to the PDF library only when it is small, since
+ * that library inflates without a limit. Undefined means the stream could not
+ * be decoded, which is treated as drawing nothing.
+ */
+function decodeStream(stream: PDFRawStream, budget: Budget): string | undefined {
+  const filter = stream.dict.lookup(PDFName.of('Filter'));
+  const filters =
+    filter === undefined ? [] : filter instanceof PDFName ? [filter] : filter instanceof PDFArray ? filter.asArray() : [filter];
+  const hasParams = stream.dict.has(PDFName.of('DecodeParms'));
+
+  if (filters.length === 0) {
+    budget.charge('decoded', stream.contents.length);
+    return latin1(stream.contents);
+  }
+  if (filters.length === 1 && filters[0] === PDFName.of('FlateDecode') && !hasParams) {
+    const inflated = inflateWithin(stream.contents, MAX_DECODED_BYTES - budget.decoded);
+    if (inflated !== undefined) {
+      budget.charge('decoded', inflated.length);
+      return latin1(inflated);
+    }
+  }
+  if (stream.contents.length > MAX_OTHER_FILTER_BYTES) throw new TooComplexError();
+  try {
+    const decoded = decodePDFRawStream(stream).decode();
+    budget.charge('decoded', decoded.length);
+    return latin1(decoded);
+  } catch (error) {
+    if (error instanceof TooComplexError) throw error;
+    return undefined;
+  }
+}
+
+/**
+ * Inflate zlib data, giving up with {@link TooComplexError} once `limit` bytes
+ * have come out. Undefined if the data is not valid zlib.
+ */
+function inflateWithin(data: Uint8Array, limit: number): Uint8Array | undefined {
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const inflater = new Unzlib((chunk) => {
+    size += chunk.length;
+    if (size > limit) throw new TooComplexError();
+    chunks.push(chunk);
+  });
+  try {
+    pushInSlices(inflater, data);
+  } catch (error) {
+    if (error instanceof TooComplexError) throw error;
+    // Some producers write slightly malformed zlib that the PDF library
+    // tolerates; that path is still open to small streams.
+    return undefined;
+  }
+  const out = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
+/**
+ * Feed compressed data to an inflater a little at a time.
+ *
+ * Handed everything at once, the inflater produces the whole output before
+ * its callback can object, so a limit checked there arrives after the memory
+ * is already gone. Deflate expands at most about a thousandfold, so a 4 KB
+ * slice can produce no more than about 4 MB before the limit is consulted.
+ */
+function pushInSlices(inflater: Unzlib, data: Uint8Array): void {
+  const SLICE = 4096;
+  for (let offset = 0; offset < data.length; offset += SLICE) {
+    inflater.push(data.subarray(offset, offset + SLICE), offset + SLICE >= data.length);
+  }
+  if (data.length === 0) inflater.push(data, true);
+}
+
+/**
+ * Refuse a file whose compressed streams inflate past the budget, before it is
+ * parsed at all.
+ *
+ * Works on the raw bytes: every `stream` keyword is followed to its
+ * `endstream`, and anything that inflates is counted, never kept. This is a
+ * guard rather than a parser, so it errs towards counting too much.
+ */
+function preflightCompressedStreams(bytes: Uint8Array): void {
+  const raw = latin1(bytes);
+  const keyword = /stream\r?\n/g;
+  let total = 0;
+  let match: RegExpExecArray | null;
+  while ((match = keyword.exec(raw)) !== null) {
+    if (raw.slice(match.index - 3, match.index) === 'end') continue;
+    const start = match.index + match[0].length;
+    const end = raw.indexOf('endstream', start);
+    if (end < 0) break;
+    keyword.lastIndex = end + 9;
+    const counter = new Unzlib((chunk) => {
+      total += chunk.length;
+      if (total > MAX_DECODED_BYTES * 2) throw new TooComplexError();
+    });
+    try {
+      pushInSlices(counter, bytes.subarray(start, end));
+    } catch (error) {
+      if (error instanceof TooComplexError) throw error;
+      // Not zlib, or not compressed at all: nothing to count.
+    }
+  }
 }
 
 function readBox(value: unknown): Box | undefined {
@@ -567,55 +799,85 @@ function compare(sent: Inventory, returned: Inventory): Comparison {
   }
   const shared = Math.min(sent.pages.length, returned.pages.length);
   for (let i = 0; i < shared; i += 1) {
-    const a = sent.pages[i] as PageSize;
-    const b = returned.pages[i] as PageSize;
+    const a = sent.pages[i] as PageGeometry;
+    const b = returned.pages[i] as PageGeometry;
     if (Math.abs(a.width - b.width) > 2 || Math.abs(a.height - b.height) > 2) {
       changed.push(`Page ${i + 1} is a different size from the one you sent.`);
+    } else if (!sameBox(a.crop, b.crop, 2) || a.rotation !== b.rotation || a.userUnit !== b.userUnit) {
+      // A smaller visible area hides whatever falls outside it — a clause, a
+      // salary — while every character stays in the file.
+      changed.push(`Page ${i + 1}: the visible area of the page has been changed, which can hide part of it.`);
     }
   }
 
-  // Every character sent must still be there, in the same place.
+  if (returned.layers && !sent.layers) {
+    review.push('It uses layers, which can show or hide parts of the page. Check it by eye.');
+  }
+
+  // Every character sent must still be there, in the same place, and still
+  // visible. Present-but-hidden counts as changed: white text, invisible text
+  // or text clipped away reads as gone, even though it is still in the file.
   const returnedIndex = indexText(returned);
   const used = new Set<TextMark>();
   const missing: TextMark[] = [];
+  const hidden: TextMark[] = [];
   for (const mark of sent.text) {
     const match = findNear(returnedIndex, mark, used);
-    if (match) used.add(match);
-    else missing.push(mark);
+    if (!match) {
+      missing.push(mark);
+      continue;
+    }
+    used.add(match);
+    if (mark.shown && (!match.shown || Math.abs(match.lightness - mark.lightness) > 0.35)) hidden.push(mark);
   }
   for (const [where, count] of regions(missing, sent.pages)) {
     changed.push(`${where}: ${plural(count, 'line')} of the original text ${count === 1 ? 'is' : 'are'} missing, moved or changed.`);
   }
+  for (const [where, count] of regions(hidden, sent.pages)) {
+    changed.push(`${where}: ${plural(count, 'line')} of the original text ${count === 1 ? 'has' : 'have'} been hidden or made invisible.`);
+  }
 
   // Everything new: characters, and shapes, images and annotations that the
-  // sent letter did not have.
-  const addedText = returned.text.filter((mark) => !used.has(mark));
-  const addedDrawings = unmatchedDrawings(sent.drawings, returned.drawings);
+  // sent letter did not have. Additions nobody can see are left out.
+  const addedText = returned.text.filter((mark) => !used.has(mark) && mark.shown);
+  const addedDrawings = unmatchedDrawings(sent.drawings, returned.drawings).filter(
+    (drawing) => drawing.info === undefined || (drawing.info.alpha >= 0.1 && visibleBox(drawing) !== null),
+  );
 
-  // Only text that is still there can be covered. Text already reported
-  // missing would otherwise be reported twice — once as gone, and again as
-  // "covered" by whatever now stands in its place.
-  const present = new Set(sent.text.filter((mark) => !missing.includes(mark)));
-  const protectedText = [...present].filter((mark) => !DECORATIVE.test(mark.text));
+  // Only text that is still there, and visible, can be covered. Text already
+  // reported would otherwise be reported twice.
+  const gone = new Set([...missing, ...hidden]);
+  const protectedText = new TextGrid(
+    sent.text.filter((mark) => !gone.has(mark) && mark.shown && !DECORATIVE.test(mark.text)),
+  );
   const covering: { page: number; box: Box }[] = [];
   const coveredUp: { page: number; box: Box }[] = [];
   const uncheckable = new Set<number>();
   for (const drawing of addedDrawings) {
-    if (drawing.box === undefined) uncheckable.add(drawing.page);
-    else if (covers(drawing.box, drawing.page, protectedText)) {
-      // A pale, filled shape over the text hides it: correction fluid, in
-      // effect. A signature is ink, never white, so this is not a judgement
-      // call the way a stroke crossing a printed name is.
-      const place = { page: drawing.page, box: drawing.box };
-      if (drawing.kind === 'fill' && (drawing.lightness ?? 0) >= WHITEOUT_LIGHTNESS) coveredUp.push(place);
-      else covering.push(place);
+    const box = visibleBox(drawing);
+    if (box === undefined) {
+      uncheckable.add(drawing.page);
+      continue;
     }
+    if (box === null || !protectedText.covers(box, drawing.page)) continue;
+    // A filled rectangle over the text, of any colour, or a pale fill of any
+    // shape, hides it: correction fluid or a redaction bar. A signature is
+    // neither — it is ink, and never a plain box.
+    const place = { page: drawing.page, box };
+    const info = drawing.info;
+    const coverUp =
+      drawing.kind === 'fill' &&
+      info !== undefined &&
+      info.alpha >= 0.5 &&
+      (info.rectangles || info.lightness >= WHITEOUT_LIGHTNESS);
+    if (coverUp) coveredUp.push(place);
+    else covering.push(place);
   }
   for (const where of new Set(coveredUp.map((item) => describePlace(item.page, item.box, returned.pages)))) {
     changed.push(`${where}: some of the original text has been covered over.`);
   }
   for (const mark of addedText) {
-    if (covers(mark.box, mark.page, protectedText)) covering.push(mark);
+    if (protectedText.covers(mark.box, mark.page)) covering.push(mark);
   }
   for (const where of new Set(covering.map((item) => describePlace(item.page, item.box, returned.pages)))) {
     review.push(`${where}: something added sits over the original text. Open the letter and check it is only a signature or initials.`);
@@ -627,56 +889,103 @@ function compare(sent: Inventory, returned: Inventory): Comparison {
   const additions: string[] = [];
   const textPlaces = new Set(addedText.map((mark) => describePlace(mark.page, mark.box, returned.pages)));
   for (const where of textPlaces) additions.push(`Text — ${lowerFirst(where)}`);
-  const drawingPlaces = new Set(
-    addedDrawings
-      .filter((drawing) => drawing.box !== undefined)
-      .map((drawing) => describePlace(drawing.page, drawing.box as Box, returned.pages)),
-  );
+  const drawingPlaces = new Set<string>();
+  for (const drawing of addedDrawings) {
+    const box = visibleBox(drawing);
+    if (box) drawingPlaces.add(describePlace(drawing.page, box, returned.pages));
+  }
   for (const where of drawingPlaces) additions.push(`Signature or drawing — ${lowerFirst(where)}`);
 
   return { changed, review, additions };
 }
 
+/**
+ * The part of a drawing that can be seen: its box cut down to its clip.
+ * Undefined when its extent is unknown; null when the clip leaves nothing.
+ */
+function visibleBox(drawing: Drawing): Box | undefined | null {
+  if (drawing.box === undefined) return undefined;
+  const clip = drawing.info?.clip;
+  if (clip === undefined) return drawing.box;
+  const box = {
+    x0: Math.max(drawing.box.x0, clip.x0),
+    y0: Math.max(drawing.box.y0, clip.y0),
+    x1: Math.min(drawing.box.x1, clip.x1),
+    y1: Math.min(drawing.box.y1, clip.y1),
+  };
+  return box.x1 > box.x0 && box.y1 > box.y0 ? box : null;
+}
+
 function unmatchedDrawings(sent: readonly Drawing[], returned: readonly Drawing[]): Drawing[] {
-  const remaining = [...sent];
+  // Bucketed by page and kind, so a file with many drawings is not compared
+  // against every drawing of the letter one by one.
+  const remaining = new Map<string, Drawing[]>();
+  for (const drawing of sent) {
+    const key = `${drawing.page}|${drawing.kind}`;
+    const bucket = remaining.get(key);
+    if (bucket) bucket.push(drawing);
+    else remaining.set(key, [drawing]);
+  }
   const added: Drawing[] = [];
   for (const drawing of returned) {
-    const index = remaining.findIndex(
-      (candidate) =>
-        candidate.page === drawing.page &&
-        candidate.kind === drawing.kind &&
-        sameBox(candidate.box, drawing.box),
-    );
-    if (index >= 0) remaining.splice(index, 1);
+    const bucket = remaining.get(`${drawing.page}|${drawing.kind}`) ?? [];
+    const index = bucket.findIndex((candidate) => sameBox(candidate.box, drawing.box));
+    if (index >= 0) bucket.splice(index, 1);
     else added.push(drawing);
   }
   return added;
 }
 
-function sameBox(a: Box | undefined, b: Box | undefined): boolean {
+function sameBox(a: Box | undefined, b: Box | undefined, tolerance = POSITION_TOLERANCE): boolean {
   if (a === undefined || b === undefined) return a === b;
   return (
-    Math.abs(a.x0 - b.x0) <= POSITION_TOLERANCE &&
-    Math.abs(a.y0 - b.y0) <= POSITION_TOLERANCE &&
-    Math.abs(a.x1 - b.x1) <= POSITION_TOLERANCE &&
-    Math.abs(a.y1 - b.y1) <= POSITION_TOLERANCE
+    Math.abs(a.x0 - b.x0) <= tolerance &&
+    Math.abs(a.y0 - b.y0) <= tolerance &&
+    Math.abs(a.x1 - b.x1) <= tolerance &&
+    Math.abs(a.y1 - b.y1) <= tolerance
   );
 }
 
-/** Whether a box covers a meaningful share of any original character. */
-function covers(box: Box, page: number, text: readonly TextMark[]): boolean {
-  return text.some((mark) => {
-    if (mark.page !== page) return false;
-    const width = Math.min(box.x1, mark.box.x1) - Math.max(box.x0, mark.box.x0);
-    const height = Math.min(box.y1, mark.box.y1) - Math.max(box.y0, mark.box.y0);
-    if (width <= 0 || height <= 0) return false;
-    const area = (mark.box.x1 - mark.box.x0) * (mark.box.y1 - mark.box.y0);
-    return area > 0 && (width * height) / area >= COVER_THRESHOLD;
-  });
+/**
+ * Original characters indexed by area, so asking whether something covers
+ * any of them looks only at the characters nearby.
+ */
+class TextGrid {
+  static readonly CELL = 24;
+  readonly #cells = new Map<string, TextMark[]>();
+
+  constructor(marks: readonly TextMark[]) {
+    for (const mark of marks) {
+      for (const key of gridKeys(mark.page, mark.box)) {
+        const cell = this.#cells.get(key);
+        if (cell) cell.push(mark);
+        else this.#cells.set(key, [mark]);
+      }
+    }
+  }
+
+  /** Whether a box covers a meaningful share of any indexed character. */
+  covers(box: Box, page: number): boolean {
+    for (const key of gridKeys(page, box)) {
+      for (const mark of this.#cells.get(key) ?? []) {
+        const area = (mark.box.x1 - mark.box.x0) * (mark.box.y1 - mark.box.y0);
+        if (area > 0 && overlapArea(box, mark.box) / area >= COVER_THRESHOLD) return true;
+      }
+    }
+    return false;
+  }
+}
+
+/** Grid cells a box touches, clamped so a vast box costs no more than a page. */
+function* gridKeys(page: number, box: Box): Generator<string> {
+  const cell = (value: number): number => Math.floor(Math.max(-2000, Math.min(4000, value)) / TextGrid.CELL);
+  for (let x = cell(box.x0); x <= cell(box.x1); x += 1) {
+    for (let y = cell(box.y0); y <= cell(box.y1); y += 1) yield `${page}|${x}|${y}`;
+  }
 }
 
 /** Group characters into lines, and count lines per page region. */
-function regions(marks: readonly TextMark[], pages: readonly PageSize[]): Map<string, number> {
+function regions(marks: readonly TextMark[], pages: readonly PageGeometry[]): Map<string, number> {
   const lines = new Map<string, Set<number>>();
   for (const mark of marks) {
     const where = describePlace(mark.page, mark.box, pages);
@@ -688,7 +997,7 @@ function regions(marks: readonly TextMark[], pages: readonly PageSize[]): Map<st
 }
 
 /** "Page 2, near the bottom" — a place a person can find by looking. */
-function describePlace(page: number, box: Box, pages: readonly PageSize[]): string {
+function describePlace(page: number, box: Box, pages: readonly PageGeometry[]): string {
   const height = pages[page - 1]?.height ?? 842;
   const fromTop = 1 - (box.y0 + box.y1) / 2 / height;
   const band = fromTop < 1 / 3 ? 'near the top' : fromTop < 2 / 3 ? 'in the middle' : 'near the bottom';

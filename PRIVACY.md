@@ -21,8 +21,10 @@ For anyone who needs the answer rather than the reasoning:
 - **Personal data never reaches an error message or a log.** Messages name the
   field and the row — never the value — so they are safe to screenshot or paste
   into a ticket.
-- **The author's details do not travel.** The template's author, company and
-  timestamps are stripped from every generated document by default.
+- **The author's details do not travel.** The template's author, company,
+  timestamps, review comments and tracked-change names are stripped from every
+  generated document by default. One gap remains, noted below: images a Word
+  template loads from the internet.
 - **It never sends email.** It can write an email for each letter, as a file
   you open and send yourself. Every address is checked first, and the result
   is shown by row number, never by address.
@@ -167,9 +169,31 @@ Office and PDF files carry metadata that is easy to forget and travels to every
 recipient. By default Doclyst removes, from each generated file:
 
 - **DOCX** — `dc:creator`, `cp:lastModifiedBy`, `cp:lastPrinted`,
-  `dc:description`, `cp:category`, plus `Company` and `Manager`.
+  `dc:description`, `cp:category`, plus `Company` and `Manager`. Also the
+  template's **review comments** (which Word shows in the margin, so a note
+  left on the template would be read by every recipient), the list of
+  commenters with their email addresses, custom document properties, the
+  names and times on tracked changes, and the path to the template on the
+  author's machine. The package's relationships and content types are updated
+  to match, so Word does not report the file as damaged.
 - **PDF** — title, author, subject, keywords, producer and creator, with
-  creation and modification dates fixed to a constant.
+  creation and modification dates fixed to a constant; any further fields a
+  producer added to the document information; the XMP metadata block, which
+  Word writes on every "Save as PDF" and which repeats the author's name;
+  application-private data; sticky-note comments and their pop-ups; and the
+  author and timestamps on any other annotation. Objects removed this way are
+  deleted from the file, not merely unlinked — an unlinked object is still in
+  the file for anything that looks.
+
+Whatever the metadata setting, a filled PDF also loses any script, open action
+or attached file the template carried. A letter has no use for them, and they
+would otherwise reach every recipient.
+
+**Not yet handled:** a Word template that links to something on the internet —
+an image loaded from a web address, for example — keeps that link, so the
+recipient's copy of Word may fetch it when the letter is opened, telling
+whoever runs that address that it was. Doclyst does not yet warn about this.
+Avoid linked images in templates; embed them instead.
 
 Archive timestamps are also fixed, so the file does not record when each record
 was processed. Use `--keep-metadata` to opt out.
@@ -242,10 +266,26 @@ discarded when the tab closes.
 It compares what each page *draws*, not what the file contains: every character,
 with its position, including the values inside flattened form fields, plus
 every painted shape, image and visible annotation. A returned copy passes only
-if everything the sent letter drew is still there, in place. Anything new is
-treated as the signature unless it overlaps the original text — and a light,
-filled shape over the original text is reported as a cover-up outright, since a
-signature is ink, never white.
+if everything the sent letter drew is still there, in place, **and still
+visible**: text that is still in the file but drawn in white, in an invisible
+mode, fully transparent, or clipped away counts as changed, as does a page
+whose visible area has been shrunk or turned. Anything new is treated as the
+signature unless it overlaps the original text — and a filled rectangle of any
+colour, or a pale fill of any shape, over the original text is reported as a
+cover-up outright, since a signature is ink and never a box.
+
+Every returned file is supplied by someone outside the organisation, so it is
+treated as hostile. There are fixed limits on file size (50 MB), on how much
+can be decompressed (64 MB, checked before the file is parsed and enforced as
+it is read), on how many times embedded drawings may be drawn, and on how many
+marks a file may hold. A file past any of them is reported as unable to be
+checked rather than allowed to freeze the page.
+
+**Its limit.** The check catches accidental changes and the ordinary ways of
+altering a PDF. It is not forensic. Someone who understands PDF internals well
+could still build a file it misses — by changing what a font's characters look
+like while keeping what they mean, for instance. The letter you sent remains
+the record of what was offered; keep it.
 
 Results are written to be safe to share: they give a page and a region ("Page 1,
 near the top"), never the words found there. A scanned or photographed copy has

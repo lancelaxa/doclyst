@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { PDFDocument, PDFName, PDFNumber, StandardFonts, rgb } from 'pdf-lib';
+import {
+  PDFArray,
+  PDFDocument,
+  PDFName,
+  PDFNumber,
+  PDFRawStream,
+  StandardFonts,
+  decodePDFRawStream,
+  rgb,
+} from 'pdf-lib';
+import { zlibSync } from 'fflate';
 import { checkReturnedLetters, type LetterFile } from '../src/verify/returned.js';
 import { preparePdfTemplate } from '../src/pdf/autofields.js';
 import { fillPdf } from '../src/pdf/fill.js';
@@ -264,5 +274,146 @@ describe('checkReturnedLetters', () => {
     const report = await checkOne(await edited(await letterFor({ ...PEOPLE[0]!, SALARY: '9,500' }), sign));
     const said = [...report.findings, ...report.additions].join(' ');
     for (const value of [...Object.values(PEOPLE[0]!), '9,500']) expect(said).not.toContain(value);
+  });
+
+  describe('against deliberate tampering', () => {
+    /** Put instructions in front of the page's own, so they apply to all of it. */
+    function prefixContent(doc: PDFDocument, instructions: string): void {
+      const page = doc.getPage(0);
+      const contents = page.node.get(PDFName.of('Contents'));
+      const existing = contents instanceof PDFArray ? contents.asArray() : [contents!];
+      page.node.set(
+        PDFName.of('Contents'),
+        doc.context.obj([doc.context.register(doc.context.flateStream(instructions)), ...existing]),
+      );
+    }
+
+    it('catches a page whose visible area was shrunk to hide part of it', async () => {
+      const report = await checkOne(
+        await edited(await letterFor(PEOPLE[0]!), (doc) => {
+          doc.getPage(0).setCropBox(0, 0, 595, 600);
+          sign(doc);
+        }),
+      );
+      expect(report.status).toBe('changed');
+      expect(report.findings).toContain('Page 1: the visible area of the page has been changed, which can hide part of it.');
+    });
+
+    it('catches the filled-in values redrawn in white, with new ones typed beside them', async () => {
+      const report = await checkOne(
+        await edited(await letterFor(PEOPLE[0]!), async (doc) => {
+          const { context } = doc;
+          for (const [ref, object] of context.enumerateIndirectObjects()) {
+            if (!(object instanceof PDFRawStream) || object.dict.get(PDFName.of('Subtype')) !== PDFName.of('Form')) continue;
+            const content = new TextDecoder('latin1').decode(decodePDFRawStream(object).decode());
+            if (!content.includes(' Tj')) continue;
+            const replacement = context.flateStream(content.replace('0 g', '1 g'), {
+              Type: 'XObject',
+              Subtype: 'Form',
+              BBox: object.dict.get(PDFName.of('BBox')),
+              Resources: object.dict.get(PDFName.of('Resources')),
+            });
+            context.assign(ref, replacement);
+          }
+          doc.getPage(0).drawText('9,500', { x: 230, y: 670, size: 11, font: await doc.embedFont(StandardFonts.Helvetica) });
+          sign(doc);
+        }),
+      );
+      expect(report.status).toBe('changed');
+      expect(report.findings.some((finding) => finding.includes('hidden or made invisible'))).toBe(true);
+    });
+
+    it('catches text switched to an invisible render mode', async () => {
+      const report = await checkOne(await edited(await letterFor(PEOPLE[0]!), (doc) => prefixContent(doc, '3 Tr')));
+      expect(report.status).toBe('changed');
+      expect(report.findings.some((finding) => finding.includes('hidden or made invisible'))).toBe(true);
+    });
+
+    it('catches a page clipped down to nothing', async () => {
+      const report = await checkOne(await edited(await letterFor(PEOPLE[0]!), (doc) => prefixContent(doc, '0 0 1 1 re W n')));
+      expect(report.status).toBe('changed');
+    });
+
+    it('catches text made fully transparent', async () => {
+      const report = await checkOne(
+        await edited(await letterFor(PEOPLE[0]!), (doc) => {
+          const page = doc.getPage(0);
+          page.node.Resources()!.set(PDFName.of('ExtGState'), doc.context.obj({ Clear: { ca: 0, CA: 0 } }));
+          prefixContent(doc, '/Clear gs');
+        }),
+      );
+      expect(report.status).toBe('changed');
+    });
+
+    it('catches a dark box over the text, not only a white one', async () => {
+      const report = await checkOne(
+        await edited(await letterFor(PEOPLE[0]!), (doc) => {
+          doc.getPage(0).drawRectangle({ ...SALARY_AT, color: rgb(0, 0, 0) });
+          sign(doc);
+        }),
+      );
+      expect(report.status).toBe('changed');
+      expect(report.findings).toContain('Page 1, near the top: some of the original text has been covered over.');
+    });
+
+    it('asks for a look at a file that uses layers', async () => {
+      const report = await checkOne(
+        await edited(await letterFor(PEOPLE[0]!), (doc) => {
+          doc.catalog.set(PDFName.of('OCProperties'), doc.context.obj({ OCGs: [], D: {} }));
+          sign(doc);
+        }),
+      );
+      expect(report.status).toBe('review');
+      expect(report.findings).toContain('It uses layers, which can show or hide parts of the page. Check it by eye.');
+    });
+  });
+
+  describe('against files built to exhaust the page', () => {
+    const TOO_BIG = 'It is far larger or more complicated than a signed letter should be, so it was not checked. Compare it with the original by eye.';
+
+    it('refuses a form that draws itself ten times over, seven levels deep', async () => {
+      const doc = await PDFDocument.create();
+      const page = doc.addPage([595, 842]);
+      page.drawText('x', { x: 10, y: 10 });
+      const { context } = doc;
+      let child = context.register(context.flateStream('0 0 1 1 re f', { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 1, 1] }));
+      for (let level = 0; level < 7; level += 1) {
+        child = context.register(
+          context.flateStream('/X Do '.repeat(10), { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 1, 1], Resources: { XObject: { X: child } } }),
+        );
+      }
+      page.node.Resources()!.set(PDFName.of('XObject'), context.obj({ X: child }));
+      page.node.addContentStream(context.register(context.flateStream('/X Do')));
+
+      const started = Date.now();
+      const report = await checkOne(await doc.save());
+      expect(Date.now() - started).toBeLessThan(10_000);
+      expect(report.status).toBe('unreadable');
+      expect(report.findings).toEqual([TOO_BIG]);
+    });
+
+    it('refuses a small stream that would inflate to hundreds of megabytes', async () => {
+      const doc = await PDFDocument.create();
+      const page = doc.addPage([595, 842]);
+      page.drawText('x', { x: 10, y: 10 });
+      const bomb = zlibSync(new Uint8Array(160 * 1024 * 1024).fill(0x20), { level: 9 });
+      const stream = PDFRawStream.of(doc.context.obj({ Filter: 'FlateDecode', Length: bomb.length }), bomb);
+      page.node.addContentStream(doc.context.register(stream));
+
+      const started = Date.now();
+      const report = await checkOne(await doc.save());
+      expect(Date.now() - started).toBeLessThan(10_000);
+      expect(report.findings).toEqual([TOO_BIG]);
+    }, 30_000);
+
+    it('copes with arrays nested deeper than any real file', async () => {
+      const report = await checkOne(
+        await edited(await letterFor(PEOPLE[0]!), (doc) => {
+          doc.getPage(0).node.addContentStream(doc.context.register(doc.context.flateStream('['.repeat(100_000))));
+          sign(doc);
+        }),
+      );
+      expect(report.status).toBe('signed');
+    });
   });
 });

@@ -25,12 +25,23 @@ export function decodeXmlText(xml: string): string {
       const code = Number.parseInt(entity.slice(1), 10);
       return Number.isFinite(code) ? safeFromCodePoint(code, whole) : whole;
     }
-    return NAMED_ENTITIES[entity] ?? whole;
+    return Object.hasOwn(NAMED_ENTITIES, entity) ? (NAMED_ENTITIES[entity] as string) : whole;
   });
 }
 
+/**
+ * The character a numeric reference names, if XML allows it in a document.
+ *
+ * Surrogate halves, U+FFFE/U+FFFF and most control characters are not legal
+ * XML characters. Decoding one from a spreadsheet cell and writing it into a
+ * .docx would produce a file Word refuses to open, so the reference is left as
+ * the literal text it was.
+ */
 function safeFromCodePoint(code: number, fallback: string): string {
   if (code < 0 || code > 0x10ffff) return fallback;
+  if (code >= 0xd800 && code <= 0xdfff) return fallback;
+  if (code === 0xfffe || code === 0xffff) return fallback;
+  if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) return fallback;
   try {
     return String.fromCodePoint(code);
   } catch {

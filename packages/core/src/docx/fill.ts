@@ -96,11 +96,16 @@ export function prepareDocx(template: Uint8Array, options: DocxFillOptions = {})
   const staticParts = new Map<string, ZipEntryInput>();
   const textParts = new Map<string, string>();
 
+  const scrub = options.scrubMetadata ?? true;
   for (const [name, bytes] of Object.entries(entries)) {
+    if (scrub && AUTHOR_ONLY_PART_RE.test(name)) continue;
     if (TEXT_PART_RE.test(name)) {
-      textParts.set(name, strFromU8(bytes));
-    } else if ((options.scrubMetadata ?? true) && isMetadataPart(name)) {
+      const xml = strFromU8(bytes);
+      textParts.set(name, scrub ? scrubAuthorshipXml(xml) : xml);
+    } else if (scrub && isMetadataPart(name)) {
       staticParts.set(name, withChosenLevel(strToU8(scrubMetadataXml(name, strFromU8(bytes)))));
+    } else if (scrub && isPackageStructurePart(name)) {
+      staticParts.set(name, withChosenLevel(strToU8(scrubPackageXml(name, strFromU8(bytes)))));
     } else {
       staticParts.set(name, withChosenLevel(bytes));
     }
@@ -218,6 +223,63 @@ function assertSafeEntryName(name: string): void {
 
 function isMetadataPart(name: string): boolean {
   return name === 'docProps/core.xml' || name === 'docProps/app.xml';
+}
+
+/**
+ * Parts that hold nothing but the template author's own material, and are
+ * dropped from every generated document.
+ *
+ * Review comments are the one that matters most: Word shows them in the
+ * margin, so "Is this salary band right?" left on the template would be read
+ * by every person the letter is sent to. The people part lists each
+ * commenter, often with their email address, and custom properties carry
+ * whatever the author's organisation stamps on its files.
+ */
+const AUTHOR_ONLY_PART_RE =
+  /^(word\/(comments|commentsExtended|commentsIds|commentsExtensible|people)\.xml|docProps\/custom\.xml)$/;
+
+/** Relationship types that point at a dropped part, or at the author's machine. */
+const AUTHOR_ONLY_RELATIONSHIP_RE =
+  /\/(comments|commentsExtended|commentsIds|commentsExtensible|people|custom-properties|attachedTemplate)"/;
+
+function isPackageStructurePart(name: string): boolean {
+  return name === '[Content_Types].xml' || name === 'word/settings.xml' || /(^|\/)_rels\/[^/]+\.rels$/.test(name);
+}
+
+/**
+ * Keep the package consistent once author-only parts are gone.
+ *
+ * A relationship or content-type entry left pointing at a removed part makes
+ * Word report the file as damaged. The attached-template reference goes too:
+ * it is a path on the author's machine — `C:\Users\<name>\...` — and is of no
+ * use to anyone who receives the letter.
+ */
+function scrubPackageXml(name: string, xml: string): string {
+  if (name === '[Content_Types].xml') {
+    return xml.replace(/<Override\b[^>]*PartName="\/(word\/(comments|commentsExtended|commentsIds|commentsExtensible|people)|docProps\/custom)\.xml"[^>]*\/>/g, '');
+  }
+  if (name === 'word/settings.xml') {
+    return xml.replace(/<w:attachedTemplate\b[^>]*\/>/g, '');
+  }
+  return xml.replace(/<Relationship\b[^>]*>/g, (element) =>
+    AUTHOR_ONLY_RELATIONSHIP_RE.test(element) ? '' : element,
+  );
+}
+
+/**
+ * Remove the author's traces from a text part: the anchors of the comments
+ * just dropped, and the names and times on tracked changes.
+ *
+ * The anchors have to go with the comments — a reference to a comment that
+ * no longer exists is another thing Word reports as damage. Tracked-change
+ * authors are blanked rather than removed, because the attribute is required.
+ */
+function scrubAuthorshipXml(xml: string): string {
+  return xml
+    .replace(/<w:comment(RangeStart|RangeEnd|Reference)\b[^>]*\/>/g, '')
+    .replace(/\sw:author="[^"]*"/g, ' w:author=""')
+    .replace(/\sw:initials="[^"]*"/g, '')
+    .replace(/\sw:date="[^"]*"/g, '');
 }
 
 /**

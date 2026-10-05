@@ -89,7 +89,10 @@ export function toRecords(rows: readonly (readonly string[])[]): RecordSet {
 
     const record: Record<string, string> = {};
     header.forEach((name, index) => {
-      record[name] = row[index] ?? '';
+      // Defined rather than assigned: assigning to a key called `__proto__`
+      // changes the object's prototype instead of adding a column, so that
+      // column would silently vanish.
+      Object.defineProperty(record, name, { value: row[index] ?? '', enumerable: true });
     });
     records.push(Object.freeze(record));
   }
