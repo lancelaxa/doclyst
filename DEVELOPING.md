@@ -139,9 +139,11 @@ promise not to look":
   **browser** refuses to let it open a network connection — fetch, XHR,
   WebSocket and EventSource are all blocked. The guarantee does not depend on
   our code staying careful.
-- The built bundle contains no `fetch`, `XMLHttpRequest`, `WebSocket`,
-  `localStorage`, `indexedDB` or service worker at all. That is checkable with
-  `grep`, and it is asserted by the tests.
+- Doclyst's own source contains no `fetch`, `XMLHttpRequest`, `WebSocket`,
+  `localStorage`, `indexedDB` or service worker. The bundle also contains
+  pdf.js (used to render pages for the signed-copy check), which has network
+  code for loading PDFs by URL; it is only ever given bytes, and the policy
+  blocks it anyway. Tests assert no request is made during a batch or a check.
 - There are no remote fonts, scripts, styles or images, and the favicon is
   inlined, so the page issues no requests beyond loading its own two assets.
 - Nothing is persisted. Close the tab and every record is gone.
@@ -149,8 +151,10 @@ promise not to look":
   column header or filename out of an untrusted spreadsheet cannot inject
   anything.
 
-The interface is plain HTML, CSS and TypeScript with no framework and no
-dependencies of its own: drag-and-drop file zones, a light and dark theme that
+The interface is plain HTML, CSS and TypeScript with no framework. Its one
+dependency of its own is pdf.js (`pdfjs-dist`, legacy build, pinned exactly),
+which renders pages for the signed-copy check; see `apps/web/src/render.ts`
+for why it runs on the page's thread rather than in a worker. The rest: drag-and-drop file zones, a light and dark theme that
 follows the system setting, keyboard-reachable controls with visible focus,
 live-region status updates, and a reduced-motion preference that is honoured.
 Icons are inline SVG and type is system fonts, because a single webfont request
@@ -240,7 +244,7 @@ Run `node apps/cli/dist/bin.js --help` for the full list.
 `npm run build` produces two things in `apps/web/dist`:
 
 - `index.html` plus assets — a normal static site, deployable anywhere.
-- **`doclyst.html`** — the entire app inlined into one ~480 KB file that runs
+- **`doclyst.html`** — the entire app inlined into one ~2.2 MB file that runs
   by double-clicking it, with no server and no network.
 
 The single file exists because a page opened from `file://` cannot load an

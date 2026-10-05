@@ -14,6 +14,7 @@ import {
 } from 'pdf-lib';
 import { DoclystError, safeErrorSummary } from '../errors.js';
 import { readFontFromDict, type FontInfo } from './content.js';
+import { InflateLimitError, preflightOnce } from './limits.js';
 import type { PlaceholderResolver } from '../docx/wordxml.js';
 
 /**
@@ -105,6 +106,13 @@ async function loadPdf(template: Uint8Array): Promise<PDFDocument> {
   }
 
   try {
+    preflightOnce(template, MAX_PDF_TEMPLATE_INFLATED_BYTES);
+  } catch (error) {
+    if (!(error instanceof InflateLimitError)) throw error;
+    throw new DoclystError('LIMIT_EXCEEDED', 'The PDF template expands to more than the supported size limit.');
+  }
+
+  try {
     // `ignoreEncryption` stays false: an encrypted template would otherwise be
     // filled and saved *without* its protection, quietly downgrading a control
     // the template owner deliberately applied.
@@ -117,6 +125,12 @@ async function loadPdf(template: Uint8Array): Promise<PDFDocument> {
     );
   }
 }
+
+/**
+ * Most a PDF template may decompress to, matching the DOCX template limit.
+ * A letterhead with images comes nowhere near it.
+ */
+export const MAX_PDF_TEMPLATE_INFLATED_BYTES = 200 * 1024 * 1024;
 
 /** List the fillable field names of a PDF template, as placeholder keys. */
 export async function readPdfFields(template: Uint8Array): Promise<string[]> {
@@ -925,5 +939,38 @@ function removeActiveContent(doc: PDFDocument): void {
     names.delete(PDFName.of('JavaScript'));
     names.delete(PDFName.of('EmbeddedFiles'));
   }
-  for (const page of doc.getPages()) page.node.delete(PDFName.of('AA'));
+  for (const page of doc.getPages()) {
+    page.node.delete(PDFName.of('AA'));
+
+    // A link or a form field can carry a script or a "launch this file"
+    // action of its own, and a file-attachment annotation is an attached file
+    // by another route. Links that go to a web address or to a place in the
+    // document are kept; everything else they might do is not.
+    const annotations = page.node.lookup(PDFName.of('Annots'));
+    if (!(annotations instanceof PDFArray)) continue;
+    const kept = PDFArray.withContext(doc.context);
+    for (const entry of annotations.asArray()) {
+      const annotation = entry instanceof PDFRef ? doc.context.lookup(entry) : entry;
+      if (annotation instanceof PDFDict) {
+        if (annotation.lookup(PDFName.of('Subtype')) === PDFName.of('FileAttachment')) continue;
+        annotation.delete(PDFName.of('AA'));
+        const action = annotation.lookup(PDFName.of('A'));
+        const kind = action instanceof PDFDict ? action.lookup(PDFName.of('S')) : undefined;
+        if (action !== undefined && kind !== PDFName.of('URI') && kind !== PDFName.of('GoTo')) {
+          annotation.delete(PDFName.of('A'));
+        }
+        if (action instanceof PDFDict) action.delete(PDFName.of('Next'));
+      }
+      kept.push(entry);
+    }
+    if (kept.size() === 0) page.node.delete(PDFName.of('Annots'));
+    else page.node.set(PDFName.of('Annots'), kept);
+  }
+
+  // Interactive fields, when they are kept rather than flattened, can run
+  // scripts on focus, on change and on calculation.
+  const acroForm = doc.catalog.lookup(PDFName.of('AcroForm'));
+  if (acroForm instanceof PDFDict) {
+    for (const field of doc.getForm().getFields()) field.acroField.dict.delete(PDFName.of('AA'));
+  }
 }

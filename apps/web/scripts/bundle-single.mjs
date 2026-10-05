@@ -46,15 +46,27 @@ let html = readFileSync(join(dist, 'index.html'), 'utf8');
 // `$'` and friends as substitution patterns, and minified JavaScript is full
 // of `$`. Passing a string would silently corrupt the inlined bundle — and
 // the corruption shows up only as a CSP hash mismatch at load time.
-html = html.replace(
-  /<script[^>]*src="[^"]*"[^>]*><\/script>/,
-  () => `<script type="module">${script}</script>`,
-);
-html = html.replace(/<link[^>]*rel="stylesheet"[^>]*>/, () => `<style>${style}</style>`);
+//
+// Markers go in first and the code last, so the check for leftover
+// references reads only the page itself. Checking after inlining searched the
+// bundled code too — and pdf.js, which builds stylesheet links of its own,
+// contains the very text the check looks for.
+const SCRIPT_MARK = '\u0000doclyst-script\u0000';
+const STYLE_MARK = '\u0000doclyst-style\u0000';
+html = html.replace(/<script[^>]*src="[^"]*"[^>]*><\/script>/, () => SCRIPT_MARK);
+html = html.replace(/<link[^>]*rel="stylesheet"[^>]*>/, () => STYLE_MARK);
 
-if (html.includes('<script type="module" src') || html.includes('rel="stylesheet"')) {
+if (
+  !html.includes(SCRIPT_MARK) ||
+  !html.includes(STYLE_MARK) ||
+  html.includes('<script type="module" src') ||
+  html.includes('rel="stylesheet"')
+) {
   throw new Error('An asset reference survived inlining; the single file would be incomplete.');
 }
+
+html = html.replace(SCRIPT_MARK, () => `<script type="module">${script}</script>`);
+html = html.replace(STYLE_MARK, () => `<style>${style}</style>`);
 
 // Re-pin the policy to exactly these two blocks.
 html = html.replace(/script-src 'self'/, () => `script-src ${sha256(script)}`);

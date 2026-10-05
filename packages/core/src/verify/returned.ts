@@ -9,6 +9,8 @@ import {
   decodePDFRawStream,
 } from 'pdf-lib';
 import { Unzlib } from 'fflate';
+import { InflateLimitError, preflightCompressedStreams, pushInSlices } from '../pdf/limits.js';
+import { compareRenderedPages, type PageRenderer, type RenderedPage } from './visual.js';
 import {
   IDENTITY,
   multiply,
@@ -84,6 +86,12 @@ export interface ReturnedCheck {
 export interface CheckReturnedOptions {
   /** Called after each file is read, so a page can show progress. */
   readonly onProgress?: (completed: number, total: number) => void | Promise<void>;
+  /**
+   * Renders pages to pixels, for comparing how each page looks as well as
+   * what it is built from. Strongly recommended: without it, a file built to
+   * show something other than what it says can pass. See `visual.ts`.
+   */
+  readonly renderer?: PageRenderer;
 }
 
 /**
@@ -121,12 +129,12 @@ export async function checkReturnedLetters(
     await options.onProgress?.(done, total);
   };
 
-  const letters: { name: string; inventory: Inventory; index: TextIndex }[] = [];
+  const letters: { name: string; bytes: Uint8Array; inventory: Inventory; index: TextIndex }[] = [];
   const unreadableSent: string[] = [];
   for (const file of sent) {
     const inventory = await readInventory(file.bytes).catch(() => undefined);
     if (inventory === undefined || textCount(inventory) === 0) unreadableSent.push(file.name);
-    else letters.push({ name: file.name, inventory, index: indexText(inventory) });
+    else letters.push({ name: file.name, bytes: file.bytes, inventory, index: indexText(inventory) });
     await step();
   }
 
@@ -187,6 +195,10 @@ export async function checkReturnedLetters(
     }
 
     const comparison = compare(best.letter.inventory, inventory);
+    // Only worth rendering when the structure has not already settled it.
+    if (options.renderer && comparison.changed.length === 0) {
+      await compareAppearance(options.renderer, best.letter.bytes, file.bytes, comparison, inventory.pages);
+    }
     const findings = [...comparison.changed, ...comparison.review];
 
     const rival = scored[1];
@@ -337,7 +349,12 @@ async function readInventory(bytes: Uint8Array): Promise<Inventory> {
   const budget = new Budget();
   // Checked before the PDF library sees the file, because loading it inflates
   // object streams with no limit of its own.
-  preflightCompressedStreams(bytes);
+  try {
+    preflightCompressedStreams(bytes, MAX_DECODED_BYTES * 2);
+  } catch (error) {
+    if (error instanceof InflateLimitError) throw new TooComplexError();
+    throw error;
+  }
 
   let document: PDFDocument;
   try {
@@ -590,53 +607,6 @@ function inflateWithin(data: Uint8Array, limit: number): Uint8Array | undefined 
   return out;
 }
 
-/**
- * Feed compressed data to an inflater a little at a time.
- *
- * Handed everything at once, the inflater produces the whole output before
- * its callback can object, so a limit checked there arrives after the memory
- * is already gone. Deflate expands at most about a thousandfold, so a 4 KB
- * slice can produce no more than about 4 MB before the limit is consulted.
- */
-function pushInSlices(inflater: Unzlib, data: Uint8Array): void {
-  const SLICE = 4096;
-  for (let offset = 0; offset < data.length; offset += SLICE) {
-    inflater.push(data.subarray(offset, offset + SLICE), offset + SLICE >= data.length);
-  }
-  if (data.length === 0) inflater.push(data, true);
-}
-
-/**
- * Refuse a file whose compressed streams inflate past the budget, before it is
- * parsed at all.
- *
- * Works on the raw bytes: every `stream` keyword is followed to its
- * `endstream`, and anything that inflates is counted, never kept. This is a
- * guard rather than a parser, so it errs towards counting too much.
- */
-function preflightCompressedStreams(bytes: Uint8Array): void {
-  const raw = latin1(bytes);
-  const keyword = /stream\r?\n/g;
-  let total = 0;
-  let match: RegExpExecArray | null;
-  while ((match = keyword.exec(raw)) !== null) {
-    if (raw.slice(match.index - 3, match.index) === 'end') continue;
-    const start = match.index + match[0].length;
-    const end = raw.indexOf('endstream', start);
-    if (end < 0) break;
-    keyword.lastIndex = end + 9;
-    const counter = new Unzlib((chunk) => {
-      total += chunk.length;
-      if (total > MAX_DECODED_BYTES * 2) throw new TooComplexError();
-    });
-    try {
-      pushInSlices(counter, bytes.subarray(start, end));
-    } catch (error) {
-      if (error instanceof TooComplexError) throw error;
-      // Not zlib, or not compressed at all: nothing to count.
-    }
-  }
-}
 
 function readBox(value: unknown): Box | undefined {
   if (!(value instanceof PDFArray) || value.size() < 4) return undefined;
@@ -782,9 +752,50 @@ function matchShare(letter: Inventory, returned: TextIndex): number {
 
 // --- comparing -----------------------------------------------------------
 
+/**
+ * Render the sent letter and the returned copy and compare how they look,
+ * adding what is found to `comparison`.
+ */
+async function compareAppearance(
+  renderer: PageRenderer,
+  sent: Uint8Array,
+  returned: Uint8Array,
+  comparison: Comparison,
+  pages: readonly PageGeometry[],
+): Promise<void> {
+  let sentPages: readonly RenderedPage[];
+  let returnedPages: readonly RenderedPage[];
+  try {
+    sentPages = await renderer(sent);
+    returnedPages = await renderer(returned);
+  } catch {
+    comparison.review.push('It could not be displayed for the visual check. Check it by eye.');
+    return;
+  }
+
+  const lost = new Set<string>();
+  const unexplained = new Set<string>();
+  const shared = Math.min(sentPages.length, returnedPages.length);
+  for (let i = 0; i < shared; i += 1) {
+    const page = i + 1;
+    const explained = comparison.addedBoxes.filter((item) => item.page === page).map((item) => item.box);
+    const difference = compareRenderedPages(sentPages[i] as RenderedPage, returnedPages[i] as RenderedPage, explained);
+    for (const box of difference.lost) lost.add(describePlace(page, box, pages));
+    for (const box of difference.unexplained) unexplained.add(describePlace(page, box, pages));
+  }
+  for (const where of lost) {
+    comparison.changed.push(`${where}: part of the original letter no longer shows when the page is displayed.`);
+  }
+  for (const where of unexplained) {
+    comparison.review.push(`${where}: something shows on the page that the check could not otherwise account for. Check it by eye.`);
+  }
+}
+
 interface Comparison {
   readonly changed: string[];
   readonly review: string[];
+  /** Where additions were found, for lining up with what the page shows. */
+  readonly addedBoxes: readonly { page: number; box: Box }[];
   readonly additions: string[];
 }
 
@@ -896,7 +907,13 @@ function compare(sent: Inventory, returned: Inventory): Comparison {
   }
   for (const where of drawingPlaces) additions.push(`Signature or drawing — ${lowerFirst(where)}`);
 
-  return { changed, review, additions };
+  const addedBoxes: { page: number; box: Box }[] = addedText.map((mark) => ({ page: mark.page, box: mark.box }));
+  for (const drawing of addedDrawings) {
+    const box = visibleBox(drawing);
+    if (box) addedBoxes.push({ page: drawing.page, box });
+  }
+
+  return { changed, review, additions, addedBoxes };
 }
 
 /**

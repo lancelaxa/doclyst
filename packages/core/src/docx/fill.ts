@@ -9,6 +9,7 @@ import {
   replacePlaceholdersInXml,
   type PlaceholderResolver,
 } from './wordxml.js';
+import { acceptRevisionsAndDropHidden } from './revisions.js';
 
 /**
  * DOCX template filling.
@@ -48,7 +49,7 @@ export function readDocxFields(template: Uint8Array): string[] {
     // Scanning the raw XML would miss every placeholder Word had split across
     // runs — which is most of them in a real template — so `inspect` would
     // report a working template as having no fields.
-    for (const field of extractFieldNames(extractTextFromXml(strFromU8(bytes)))) {
+    for (const field of extractFieldNames(extractTextFromXml(acceptRevisionsAndDropHidden(strFromU8(bytes))))) {
       const key = field.toUpperCase();
       if (seen.has(key)) continue;
       seen.add(key);
@@ -65,7 +66,45 @@ export function readDocxText(template: Uint8Array): string {
   if (!body) {
     throw new DoclystError('INVALID_TEMPLATE', 'The DOCX file has no word/document.xml part.');
   }
-  return extractVisibleText(strFromU8(body));
+  return extractVisibleText(acceptRevisionsAndDropHidden(strFromU8(body)));
+}
+
+/**
+ * Describe what a template loads from outside itself when it is opened.
+ *
+ * A picture inserted with "Link to File", or an object linked rather than
+ * embedded, is fetched by the recipient's copy of Word each time the letter
+ * is opened — from a web address, which then learns who opened it and when,
+ * or from a network share, to which Windows may send the recipient's sign-in
+ * details. For people outside the organisation it does not even work: the
+ * share is unreachable and the logo shows as a red cross.
+ *
+ * Doclyst cannot fetch the content to embed it, and removing the link would
+ * leave a broken picture, so this is reported before anything is generated.
+ * Clickable hyperlinks are left out: they go nowhere until clicked.
+ */
+export function readLinkedContent(template: Uint8Array): string[] {
+  const found = new Set<string>();
+  for (const [name, bytes] of Object.entries(openDocx(template))) {
+    if (!/(^|\/)_rels\/[^/]+\.rels$/.test(name)) continue;
+    for (const element of strFromU8(bytes).match(/<Relationship\b[^>]*>/g) ?? []) {
+      if (!/TargetMode\s*=\s*"External"/.test(element)) continue;
+      const type = /Type\s*=\s*"[^"]*\/([^"/]+)"/.exec(element)?.[1] ?? '';
+      if (type === 'hyperlink') continue;
+      // Removed from every generated document already; see scrubPackageXml.
+      if (type === 'attachedTemplate') continue;
+      found.add(
+        type === 'image'
+          ? 'a picture linked rather than embedded'
+          : type === 'oleObject' || type === 'package'
+            ? 'an object linked to an outside file'
+            : type === 'subDocument' || type === 'frame' || type === 'aFChunk'
+              ? 'content pulled in from an outside file'
+              : 'a link to an outside file or address',
+      );
+    }
+  }
+  return [...found];
 }
 
 export interface DocxFillResult {
@@ -100,7 +139,7 @@ export function prepareDocx(template: Uint8Array, options: DocxFillOptions = {})
   for (const [name, bytes] of Object.entries(entries)) {
     if (scrub && AUTHOR_ONLY_PART_RE.test(name)) continue;
     if (TEXT_PART_RE.test(name)) {
-      const xml = strFromU8(bytes);
+      const xml = acceptRevisionsAndDropHidden(strFromU8(bytes));
       textParts.set(name, scrub ? scrubAuthorshipXml(xml) : xml);
     } else if (scrub && isMetadataPart(name)) {
       staticParts.set(name, withChosenLevel(strToU8(scrubMetadataXml(name, strFromU8(bytes)))));

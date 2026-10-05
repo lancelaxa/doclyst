@@ -5,9 +5,9 @@ import { readFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { unzipSync } from 'fflate';
+import { unzipSync, zipSync } from 'fflate';
 import { fillPdf, preparePdfTemplate, readDocxText, ValueResolver } from '@doclyst/core';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFRawStream, PDFString, StandardFonts, rgb } from 'pdf-lib';
 import { makeTemplate, makePdfTemplate, makePlaceholderPdf } from './helpers/template.js';
 import { pdfText } from './helpers/pdftext.js';
 import { installFakeFileSystem, removeFileSystemAccess } from './helpers/fake-fs.js';
@@ -541,6 +541,15 @@ describe('the built page', () => {
       await page.close();
     });
 
+    it("refuses to run inside another page's frame", async () => {
+      const page = await browser.newPage();
+      await page.setContent(`<iframe id="f" src="${origin}" width="800" height="600"></iframe>`);
+      const frame = page.frameLocator('#f');
+      await expect.poll(() => frame.locator('body').textContent()).toContain('has to be opened in its own browser tab');
+      expect(await frame.locator('#template-input').count()).toBe(0);
+      await page.close();
+    });
+
     it('persists nothing to browser storage', async () => {
       const { page } = await openPage();
       await loadInputs(page);
@@ -572,9 +581,15 @@ describe('the single-file build', () => {
   });
 
   it('references no external asset', () => {
-    const html = readFileSync(singleFile, 'utf8');
+    // The page itself, with the inlined code taken out: bundled libraries
+    // contain these strings as data, which is not the same as the page
+    // loading anything.
+    const html = readFileSync(singleFile, 'utf8')
+      .replace(/<script type="module">[\s\S]*?<\/script>/, '<script></script>')
+      .replace(/<style>[\s\S]*?<\/style>/, '<style></style>');
     expect(html).not.toMatch(/<script[^>]+src=/);
     expect(html).not.toMatch(/rel="stylesheet"/);
+    expect(html).not.toMatch(/<link[^>]+href="(?!data:)/);
     expect(html).toContain("connect-src 'none'");
   });
 
@@ -958,6 +973,21 @@ describe('choosing files', () => {
       await page.close();
     });
 
+    it('warns before generating when a Word template links to a picture elsewhere', async () => {
+      const { page } = await openPage();
+      const files = unzipSync(makeTemplate(['NAME']));
+      files['word/_rels/document.xml.rels'] = new TextEncoder().encode(
+        '<Relationships><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://tracker.example.com/p.png" TargetMode="External"/></Relationships>',
+      );
+      await page.setInputFiles('#template-input', {
+        name: 'linked.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        buffer: Buffer.from(zipSync(files)),
+      });
+      await expect.poll(() => page.textContent('#format-warnings')).toContain('a picture linked rather than embedded');
+      await page.close();
+    });
+
     it('warns when a filename pattern would expose an identifier', async () => {
       const { page } = await openPage();
       await page.fill('#filename-input', '{{NRIC}}-offer');
@@ -1123,5 +1153,82 @@ Priya Nair,6100,AISHA.RAHMAN@example.com
       expect(offOriginRequests(requests)).toEqual([]);
       await page.close();
     });
+
+    /**
+     * Forgeries built so that everything the file *says* is unchanged, and
+     * only what it *shows* differs. The structural comparison cannot see
+     * these; comparing the rendered pages does.
+     */
+    async function checkOneInPage(bytes: Uint8Array): Promise<{ status: string; text: string }> {
+      const { page, requests } = await openPage();
+      const { sent } = await letters();
+      await page.setInputFiles(
+        '#sent-input',
+        sent.map((letter, i) => ({ name: `document-000${i + 1}.pdf`, mimeType: 'application/pdf', buffer: Buffer.from(letter) })),
+      );
+      await page.setInputFiles('#returned-input', [{ name: 'back.pdf', mimeType: 'application/pdf', buffer: Buffer.from(bytes) }]);
+      const before = requests.length;
+      await page.click('#check-returned');
+      await expect.poll(() => page.locator('.check-item').count(), { timeout: 60_000 }).toBe(1);
+      // Not even to the page's own origin: rendering loads no fonts, no
+      // decoders, nothing at all.
+      expect(requests.slice(before).map((request) => request.url())).toEqual([]);
+      const result = {
+        status: (await page.locator('.check-item .badge').textContent()) ?? '',
+        text: (await page.textContent('.check-item')) ?? '',
+      };
+      expect(offOriginRequests(requests)).toEqual([]);
+      await page.close();
+      return result;
+    }
+
+    async function forged(edit: (doc: PDFDocument) => void): Promise<Uint8Array> {
+      const { sent } = await letters();
+      const doc = await PDFDocument.load(sent[0] as Uint8Array);
+      edit(doc);
+      doc.getPage(0).drawLine({ start: { x: 140, y: 165 }, end: { x: 230, y: 180 }, thickness: 1.5, color: rgb(0, 0, 0.5) });
+      return doc.save();
+    }
+
+    it('catches values hidden in a layer that is switched off', async () => {
+      const bytes = await forged((doc) => {
+        const { context } = doc;
+        const layer = context.register(context.obj({ Type: 'OCG', Name: PDFString.of('Hidden') }));
+        doc.catalog.set(PDFName.of('OCProperties'), context.obj({ OCGs: [layer], D: { OFF: [layer] } }));
+        for (const [, object] of context.enumerateIndirectObjects()) {
+          if (object instanceof PDFRawStream && object.dict.get(PDFName.of('Subtype')) === PDFName.of('Form')) {
+            object.dict.set(PDFName.of('OC'), layer);
+          }
+        }
+      });
+      const result = await checkOneInPage(bytes);
+      expect(result.status).toBe('Changed — do not accept as it is');
+      expect(result.text).toContain('no longer shows when the page is displayed');
+    }, 90_000);
+
+    it('catches the salary painted over with a white pattern', async () => {
+      const bytes = await forged((doc) => {
+        const { context } = doc;
+        const pattern = context.register(
+          context.flateStream('1 1 1 rg 0 0 10 10 re f', {
+            Type: 'Pattern', PatternType: 1, PaintType: 1, TilingType: 1, BBox: [0, 0, 10, 10], XStep: 10, YStep: 10, Resources: {},
+          }),
+        );
+        const first = doc.getPage(0);
+        first.node.Resources()!.set(PDFName.of('Pattern'), context.obj({ P0: pattern }));
+        // Not a rectangle, and its colour is a pattern rather than a number,
+        // so nothing in the file says "white box".
+        first.node.addContentStream(
+          context.register(context.flateStream('q /Pattern cs /P0 scn 150 684 m 200 684 l 206 694 l 200 704 l 150 704 l h f Q')),
+        );
+      });
+      const result = await checkOneInPage(bytes);
+      expect(result.status).toBe('Changed — do not accept as it is');
+    }, 90_000);
+
+    it('still passes an honest signature after looking at the page', async () => {
+      const result = await checkOneInPage(await forged(() => undefined));
+      expect(result.status).toBe('Signed, nothing changed');
+    }, 90_000);
   });
 });

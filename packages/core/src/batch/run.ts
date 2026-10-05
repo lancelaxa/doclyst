@@ -1,5 +1,12 @@
 import { DoclystError, safeErrorSummary } from '../errors.js';
-import { fillPreparedDocx, prepareDocx, readDocxFields, type DocxFillOptions, type PreparedDocx } from '../docx/fill.js';
+import {
+  fillPreparedDocx,
+  prepareDocx,
+  readDocxFields,
+  readLinkedContent,
+  type DocxFillOptions,
+  type PreparedDocx,
+} from '../docx/fill.js';
 import { extractDocumentModel } from '../docx/model.js';
 import { replacePlaceholdersInXml } from '../docx/wordxml.js';
 import { renderModelToPdf, type PdfRenderOptions } from '../pdf/render.js';
@@ -128,6 +135,11 @@ export interface BatchResult {
    */
   readonly unsupported: readonly string[];
   /**
+   * Things a DOCX template loads from outside itself when a generated
+   * document is opened, such as a linked picture. Empty for PDF output.
+   */
+  readonly linkedContent: readonly string[];
+  /**
    * PDF form fields whose text had to be shrunk to fit the box the template
    * gives them. Field names only, never values.
    */
@@ -157,6 +169,11 @@ export interface BatchSummary {
    * as tables or images. Empty unless a DOCX template produced PDF.
    */
   readonly unsupported: readonly string[];
+  /**
+   * Things a DOCX template loads from outside itself when a generated
+   * document is opened, such as a linked picture. Empty for PDF output.
+   */
+  readonly linkedContent: readonly string[];
   /**
    * PDF form fields whose text had to be shrunk to fit the box the template
    * gives them. Field names only, never values.
@@ -223,6 +240,7 @@ export async function* streamBatch(
   // cannot represent are the same for every record, so they are found once.
   const bodyXml = prepared?.textParts.get('word/document.xml');
   const unsupported = prepared && format === 'pdf' ? unsupportedForPdf(prepared) : [];
+  const linkedContent = template.kind === 'docx' && format === 'docx' ? readLinkedContent(template.bytes) : [];
 
   for (let i = 0; i < records.length; i += 1) {
     const row = i + 1;
@@ -310,6 +328,7 @@ export async function* streamBatch(
     generated,
     failed,
     unsupported,
+    linkedContent,
     shrunkFields: [...shrunk],
     unmatchedFields: [...unmatched].map(normalizeKey),
     warnings,
@@ -374,6 +393,7 @@ export async function runBatch(
     documents,
     failures,
     unsupported: next.value.unsupported,
+    linkedContent: next.value.linkedContent,
     shrunkFields: next.value.shrunkFields,
     unmatchedFields: next.value.unmatchedFields,
     warnings: next.value.warnings,
@@ -410,6 +430,15 @@ function unsupportedForPdf(prepared: PreparedDocx): readonly string[] {
   }
 
   return [...found];
+}
+
+/**
+ * What a template loads from outside itself when a generated document is
+ * opened. Empty for a PDF template, and irrelevant for PDF output, which does
+ * not carry pictures or objects over.
+ */
+export function readLinkedContentWarnings(template: Template): readonly string[] {
+  return template.kind === 'docx' ? readLinkedContent(template.bytes) : [];
 }
 
 /** Convert a thrown value into a failure record that carries no personal data. */

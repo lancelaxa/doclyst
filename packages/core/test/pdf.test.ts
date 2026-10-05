@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { PDFDocument, PDFName, PDFRawStream, PDFString, decodePDFRawStream } from 'pdf-lib';
 import { checkPdfTemplateFit, fieldNameToKey, fillPdf, readPdfFields } from '../src/pdf/fill.js';
+import { preparePdfTemplate } from '../src/pdf/autofields.js';
+import { zlibSync } from 'fflate';
 import { DoclystError } from '../src/errors.js';
 import { buildPdfForm } from './helpers/fixtures.js';
 
@@ -192,6 +194,10 @@ describe('fillPdf', () => {
         return PDFDocument.load(bytes, { updateMetadata: false }).then((doc) => {
           let text = Buffer.from(bytes).toString('latin1');
           for (const [, object] of doc.context.enumerateIndirectObjects()) {
+            // Every object as PDF syntax: saved files pack objects into
+            // compressed object streams, so the raw bytes alone would miss
+            // a string sitting in one of them.
+            text += `\n${object.toString()}`;
             if (object instanceof PDFRawStream) {
               try {
                 text += Buffer.from(decodePDFRawStream(object).decode()).toString('latin1');
@@ -226,6 +232,25 @@ describe('fillPdf', () => {
         expect(subtypes).toEqual(['/Link']);
       });
 
+      it('strips scripts and launches from links, and drops attached files', async () => {
+        const doc = await PDFDocument.load(await buildPdfForm([{ name: 'NAME' }]));
+        const { context } = doc;
+        const annot = (extra: Record<string, unknown>) =>
+          context.register(context.obj({ Type: 'Annot', Rect: [10, 10, 50, 30], ...extra }));
+        const web = annot({ Subtype: 'Link', A: { S: 'URI', URI: PDFString.of('https://example.com') }, AA: { E: { S: 'JavaScript', JS: PDFString.of('app.alert(2)') } } });
+        const script = annot({ Subtype: 'Link', A: { S: 'JavaScript', JS: PDFString.of('app.alert(3)') } });
+        const launch = annot({ Subtype: 'Link', A: { S: 'Launch', F: PDFString.of('calc.exe') } });
+        const chained = annot({ Subtype: 'Link', A: { S: 'URI', URI: PDFString.of('https://example.org'), Next: { S: 'JavaScript', JS: PDFString.of('app.alert(4)') } } });
+        const attached = annot({ Subtype: 'FileAttachment', FS: { Type: 'Filespec', F: PDFString.of('secret.txt') } });
+        doc.getPage(0).node.set(PDFName.of('Annots'), context.obj([web, script, launch, chained, attached]));
+
+        const result = await fillPdf(await doc.save(), echo, { scrubMetadata: false });
+        const text = await everything(result.bytes);
+        for (const gone of ['app.alert', 'calc.exe', 'secret.txt', 'FileAttachment']) expect(text).not.toContain(gone);
+        expect(text).toContain('https://example.com');
+        expect(text).toContain('https://example.org');
+      });
+
       it('removes scripts, open actions and attachments, even with scrubbing off', async () => {
         const result = await fillPdf(await authoredTemplate(), echo, { scrubMetadata: false });
         const filled = await inspect(result.bytes);
@@ -239,6 +264,18 @@ describe('fillPdf', () => {
   });
 
   describe('rejected input', () => {
+    it('refuses a template that would inflate past the size limit, before parsing it', async () => {
+      const doc = await PDFDocument.load(await buildPdfForm([{ name: 'NAME' }]));
+      const bomb = zlibSync(new Uint8Array(210 * 1024 * 1024).fill(0x20), { level: 9 });
+      doc.getPage(0).node.addContentStream(
+        doc.context.register(PDFRawStream.of(doc.context.obj({ Filter: 'FlateDecode', Length: bomb.length }), bomb)),
+      );
+      const template = await doc.save();
+      await expect(fillPdf(template, echo)).rejects.toThrow(/expands to more than the supported size limit/);
+      await expect(readPdfFields(template)).rejects.toThrow(/size limit/);
+      await expect(preparePdfTemplate(template)).rejects.toThrow(/size limit/);
+    }, 60_000);
+
     it('rejects a file that is not a PDF', async () => {
       await expect(fillPdf(new Uint8Array([1, 2, 3, 4, 5]), echo)).rejects.toThrow(/not a valid PDF/);
     });

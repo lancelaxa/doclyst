@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
-import { fillDocx, fillPreparedDocx, prepareDocx, readDocxFields, readDocxText } from '../src/docx/fill.js';
+import {
+  fillDocx,
+  fillPreparedDocx,
+  prepareDocx,
+  readDocxFields,
+  readDocxText,
+  readLinkedContent,
+} from '../src/docx/fill.js';
 import { DoclystError } from '../src/errors.js';
 import { FIXED_ARCHIVE_TIMESTAMP } from '../src/internal/deterministic.js';
 import { buildDocx, headerXml, para, run, splitRuns } from './helpers/fixtures.js';
@@ -183,9 +190,11 @@ describe('fillDocx', () => {
         expect(textOf(fillDocx(commented(), echo).bytes)).toBe('Dear <NAME>');
       });
 
-      it('blanks the names and times on tracked changes', () => {
+      it('leaves no names or times from tracked changes', () => {
+        // The changes themselves are accepted, so their wrappers go too.
         const body = strFromU8(unzipSync(fillDocx(commented(), echo).bytes)['word/document.xml']!);
-        expect(body).toContain('<w:ins w:id="1" w:author="">');
+        expect(body).not.toContain('<w:ins');
+        expect(body).not.toContain('Template Author');
         expect(body).not.toContain('2026-01-01');
       });
 
@@ -198,8 +207,8 @@ describe('fillDocx', () => {
 
       it('keeps all of it when scrubbing is turned off', () => {
         const entries = unzipSync(fillDocx(commented(), echo, { scrubMetadata: false }).bytes);
-        expect(entries['word/comments.xml']).toBeDefined();
-        expect(strFromU8(entries['word/document.xml']!)).toContain('Template Author');
+        expect(strFromU8(entries['word/comments.xml']!)).toContain('Template Author');
+        expect(strFromU8(entries['word/document.xml']!)).toContain('commentReference');
       });
     });
   });
@@ -339,3 +348,82 @@ describe('readDocxText', () => {
     expect(readDocxText(filled)).toBe(readDocxText(template).replace('{{JOB_TITLE}}', 'Data Analyst'));
   });
 });
+
+describe('what the author could not see', () => {
+  const tracked = () =>
+    buildDocx(
+      para(
+        run('Basic salary: '),
+        '<w:del w:id="1" w:author="Template Author" w:date="2026-01-01T00:00:00Z"><w:r><w:delText>band 6,000 to 7,500, offer </w:delText></w:r></w:del>',
+        '<w:ins w:id="2" w:author="Template Author"><w:r><w:t>{{SALARY}}</w:t></w:r></w:ins>',
+        '<w:r><w:rPr><w:vanish/></w:rPr><w:t>Note to self: negotiable to {{MAX_SALARY}}</w:t></w:r>',
+        '<w:r><w:rPr><w:vanish w:val="false"/></w:rPr><w:t> per month.</w:t></w:r>',
+      ) +
+        para(
+          '<w:r><w:rPr><w:b/><w:rPrChange w:id="3" w:author="Template Author"><w:rPr/></w:rPrChange></w:rPr><w:t>Welcome.</w:t></w:r>',
+          '<w:moveFrom w:id="4" w:author="Template Author"><w:r><w:t>Old position.</w:t></w:r></w:moveFrom>',
+        ),
+    );
+
+  it('accepts tracked changes, so deleted words do not travel', () => {
+    const entries = unzipSync(fillDocx(tracked(), () => '5,000').bytes);
+    const body = strFromU8(entries['word/document.xml']!);
+    expect(body).not.toContain('6,000');
+    expect(body).not.toContain('Old position');
+    expect(body).not.toMatch(/<w:(del|ins|moveFrom|rPrChange)\b/);
+    expect(textOf(fillDocx(tracked(), () => '5,000').bytes)).toBe('Basic salary: 5,000 per month.\nWelcome.');
+  });
+
+  it('removes hidden text, and does not ask for its placeholders', () => {
+    expect(readDocxFields(tracked())).toEqual(['SALARY']);
+    const body = strFromU8(unzipSync(fillDocx(tracked(), () => '5,000').bytes)['word/document.xml']!);
+    expect(body).not.toContain('negotiable');
+  });
+
+  it('does it even with metadata scrubbing off, because it is content', () => {
+    const body = strFromU8(unzipSync(fillDocx(tracked(), () => '5,000', { scrubMetadata: false }).bytes)['word/document.xml']!);
+    expect(body).not.toContain('6,000');
+    expect(body).not.toContain('negotiable');
+  });
+
+  it('leaves a run alone when it holds another run, rather than cut it wrongly', () => {
+    // A text box inside a run: the inner run's closing tag comes first.
+    const nested = buildDocx(
+      para(
+        '<w:r><w:rPr><w:vanish/></w:rPr><w:drawing><w:txbxContent><w:p><w:r><w:t>Inner</w:t></w:r></w:p></w:txbxContent></w:drawing></w:r>',
+        run('Dear {{NAME}}'),
+      ),
+    );
+    const body = strFromU8(unzipSync(fillDocx(nested, echo).bytes)['word/document.xml']!);
+    expect(body).toContain('<w:txbxContent><w:p><w:r><w:t xml:space="preserve">Inner</w:t></w:r></w:p></w:txbxContent>');
+    expect(body.match(/<w:r>/g)?.length).toBe(body.match(/<\/w:r>/g)?.length);
+  });
+});
+
+describe('readLinkedContent', () => {
+  const withRels = (rels: string) =>
+    buildDocx(para(run('{{NAME}}')), { extraParts: { 'word/_rels/document.xml.rels': `<Relationships>${rels}</Relationships>` } });
+  const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+  it('reports a picture loaded from outside the document', () => {
+    const docx = withRels(`<Relationship Id="rId9" Type="${REL}/image" Target="https://tracker.example.com/p.png" TargetMode="External"/>`);
+    expect(readLinkedContent(docx)).toEqual(['a picture linked rather than embedded']);
+  });
+
+  it('reports objects and content linked to outside files', () => {
+    const docx = withRels(
+      `<Relationship Id="rId1" Type="${REL}/oleObject" Target="file:///\\\\server\\share\\x.xlsx" TargetMode="External"/>` +
+        `<Relationship Id="rId2" Type="${REL}/subDocument" Target="part.docx" TargetMode="External"/>`,
+    );
+    expect(readLinkedContent(docx)).toEqual(['an object linked to an outside file', 'content pulled in from an outside file']);
+  });
+
+  it('ignores clickable links and embedded pictures', () => {
+    const docx = withRels(
+      `<Relationship Id="rId1" Type="${REL}/hyperlink" Target="https://example.com" TargetMode="External"/>` +
+        `<Relationship Id="rId2" Type="${REL}/image" Target="media/logo.png"/>`,
+    );
+    expect(readLinkedContent(docx)).toEqual([]);
+  });
+});
+

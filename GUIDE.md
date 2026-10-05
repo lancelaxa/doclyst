@@ -39,7 +39,7 @@ point, and it works with no internet connection at all.
 4. Unzip it. You get one file: **`doclyst.html`**.
 5. **Double-click it.** It opens in your browser and is ready to use.
 
-That single file *is* the whole application — about 480 KB, with everything
+That single file *is* the whole application — about 2.2 MB, with everything
 built in. Keep it on your desktop, email it to a colleague, or put it on a USB
 stick. It never needs updating to keep working, and it works offline.
 
@@ -133,6 +133,14 @@ Rules worth knowing:
 - Word often splits a placeholder invisibly across its internal formatting.
   Doclyst handles that, so `{{NAME}}` works even when Word has mangled it
   behind the scenes.
+- **Tracked changes and comments do not travel.** Each letter goes out as you
+  see the template with markup hidden: changes accepted, comments and hidden
+  text removed. Someone receiving the letter cannot open the review pane and
+  read what was struck out.
+- **Insert pictures normally, not with "Link to File".** A linked picture is
+  fetched from its original location each time a letter is opened, which tells
+  whoever runs that location who opened it, and shows as a broken picture for
+  anyone outside your network. Doclyst warns you if the template has one.
 
 > **Tip:** type the placeholder in one go. If you paste or edit it in pieces,
 > Word sometimes autocorrects the braces into “smart quotes”, which stops it
@@ -341,10 +349,10 @@ what the text says. Open the letter to see it.
   legal matters. This is not legal advice.
 - **It cannot read a scan or a photo**, because there is no text in it to
   compare. Those are flagged, never passed.
-- **It is not forensic.** It catches accidental changes and the usual ways of
-  altering a PDF — covering text up, hiding it, cropping the page, typing over
-  a figure. Someone expert enough with PDF files could still make one it
-  misses. The letter you sent is the record of what was offered: keep it.
+- **It looks at the page, not only the file.** Besides reading what the PDF
+  contains, it draws each page and compares it with the letter you sent, so a
+  copy rigged to *show* something different from what it *says* is caught
+  too. Still, the letter you sent is the record of what was offered: keep it.
 - **Always read what was added.** A copy marked *signed* lists every addition
   and where it is. A typed date beside the date line is normal; a typed
   sentence somewhere else is worth a look.
@@ -629,6 +637,7 @@ documented in [DEVELOPING.md](DEVELOPING.md) — nothing in this guide needs it.
 | **A ZIP this large may fail to save** | The batch is too big for an in-memory download | Use *Save to folder* / *Save as ZIP*, or the command line |
 | **The email address in column "Email" in row 7 is blank** (or *contains more than one address*, *contains a line break*, *is not a valid email address*) | That cell cannot be used to address an email | Put exactly one address in the cell, with nothing else |
 | **No email address in column "Email"** | The column chosen for addresses does not exist | Choose the right column under *Email column* |
+| **This template contains a picture linked rather than embedded** | A picture was inserted with "Link to File" | In the template, delete it and insert it again with Insert → Pictures → This Device |
 | **Double-clicking an .eml file opens it read-only, with no Send button** | Your email program does not support ready-to-send email files | Use desktop Outlook, or attach the letters by hand |
 
 Error messages deliberately name the **row and the field** but never the value,

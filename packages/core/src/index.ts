@@ -57,6 +57,7 @@ export {
   fillPreparedDocx,
   readDocxFields,
   readDocxText,
+  readLinkedContent,
   MAX_TEMPLATE_BYTES,
   type DocxFillOptions,
   type DocxFillResult,
@@ -71,6 +72,7 @@ export {
 } from './docx/wordxml.js';
 
 export { decodeXmlText, encodeXmlText } from './docx/xml.js';
+export { acceptRevisionsAndDropHidden } from './docx/revisions.js';
 
 export {
   extractDocumentModel,
@@ -117,6 +119,7 @@ export {
   detectTemplateKind,
   readTemplateFields,
   readUnsupportedForPdf,
+  readLinkedContentWarnings,
   type BatchOptions,
   type BatchEvent,
   type BatchFailure,
@@ -156,3 +159,10 @@ export {
   type ReturnedLetterReport,
   type ReturnedStatus,
 } from './verify/returned.js';
+
+export {
+  compareRenderedPages,
+  type PageRenderer,
+  type RenderedPage,
+  type VisualDifference,
+} from './verify/visual.js';

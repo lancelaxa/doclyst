@@ -86,10 +86,12 @@ interface is bytes in, bytes out. Verifiable in one command:
 grep -rE "fetch|http|net|dns|child_process|node:fs" packages/core/src
 ```
 
-Runtime dependencies are two focused, widely used libraries — `fflate` (ZIP)
-and `pdf-lib` (PDF) — both pure computation with no network capability. The
-CSV parser, the XLSX reader and the DOCX engine are implemented in-repo, which
-keeps the amount of third-party code touching personal data small.
+The engine's runtime dependencies are two focused, widely used libraries —
+`fflate` (ZIP) and `pdf-lib` (PDF) — both pure computation with no network
+capability. The CSV parser, the XLSX reader and the DOCX engine are
+implemented in-repo, which keeps the amount of third-party code touching
+personal data small. The browser page adds one more, pdf.js, described under
+*Checking signed copies*.
 
 The spreadsheet reader is deliberately in-repo rather than a dependency. The
 two realistic options were both disqualifying for this threat model: `xlsx`
@@ -189,11 +191,25 @@ Whatever the metadata setting, a filled PDF also loses any script, open action
 or attached file the template carried. A letter has no use for them, and they
 would otherwise reach every recipient.
 
-**Not yet handled:** a Word template that links to something on the internet —
-an image loaded from a web address, for example — keeps that link, so the
-recipient's copy of Word may fetch it when the letter is opened, telling
-whoever runs that address that it was. Doclyst does not yet warn about this.
-Avoid linked images in templates; embed them instead.
+Two more things are removed from every generated Word document, whatever the
+metadata setting, because they are content rather than metadata: **tracked
+changes are accepted**, so words deleted from the template with Track Changes
+on do not travel (a struck-out salary band is one click away for any
+recipient otherwise), and **hidden text is removed**. The letter that goes out
+is the one the author saw in Word's ordinary "No Markup" view.
+
+A Word template that **links** to something outside itself — a picture
+inserted with "Link to File", an object linked rather than embedded — keeps
+that link, because Doclyst cannot fetch the content to embed it and removing
+it would leave a broken picture. Each recipient's Word would fetch it when the
+letter is opened, telling whoever runs that address who opened it, or sending
+a network share the recipient's sign-in details. So Doclyst **warns** about it
+as soon as the template is loaded, and again in the results: embed the
+picture instead. Clickable hyperlinks are not warned about; they go nowhere
+until clicked.
+
+A PDF template is checked before it is parsed, as returned copies are, and
+refused if its compressed content would expand past 200 MB.
 
 Archive timestamps are also fixed, so the file does not record when each record
 was processed. Use `--keep-metadata` to opt out.
@@ -281,11 +297,28 @@ it is read), on how many times embedded drawings may be drawn, and on how many
 marks a file may hold. A file past any of them is reported as unable to be
 checked rather than allowed to freeze the page.
 
-**Its limit.** The check catches accidental changes and the ordinary ways of
-altering a PDF. It is not forensic. Someone who understands PDF internals well
-could still build a file it misses — by changing what a font's characters look
-like while keeping what they mean, for instance. The letter you sent remains
-the record of what was offered; keep it.
+**It also compares how each page looks.** A PDF can say one thing and show
+another: a font whose "4" is drawn as a "9", a layer switched off, a pattern
+painted over the text. So both versions of each page are also rendered to
+pixels and compared. Wherever the sent page had ink and the returned page
+does not, the copy is reported as changed; new ink that the structural
+comparison cannot account for is sent for review. This is what catches a
+forger who understands PDF internals, which the structural comparison alone
+does not.
+
+Rendering is done by **pdf.js**, Mozilla's PDF renderer (the one in Firefox),
+bundled into the page — it is why the single-file app is about 2.2 MB rather
+than 0.5 MB. It runs in the same tab, on bytes already in memory, configured to
+load nothing: no font downloads, no WebAssembly decoders, no form scripting.
+Pages are rendered only after a file has passed the size and complexity limits
+above. A browser test checks a returned copy and asserts that no request of
+any kind, to any origin, is made while it does.
+
+**What it still does not do.** It cannot prove who signed. It compares what
+the page shows on screen; a PDF built to print differently from how it
+displays is not compared in print form, though one using layers — the usual
+way to do that — is sent for review. The letter you sent remains the record of
+what was offered; keep it.
 
 Results are written to be safe to share: they give a page and a region ("Page 1,
 near the top"), never the words found there. A scanned or photographed copy has
@@ -357,10 +390,17 @@ no server, no upload endpoint and no backend to compromise.
   remote scripts, styles, fonts or images. Even if a future change tried to
   send a record somewhere, the browser would refuse. Verified in the tests by
   attempting a `fetch` from inside the page and asserting it is blocked.
-- **Nothing in the bundle can talk to the network.** The built output contains
-  no `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource` or `sendBeacon`.
-  Vite's modulepreload polyfill, which calls `fetch`, is deliberately disabled
-  so this stays true and greppable.
+- **Doclyst's own code makes no network calls.** Nothing under `apps/web/src`
+  or `packages/core/src` uses `fetch`, `XMLHttpRequest`, `WebSocket`,
+  `EventSource` or `sendBeacon`, and Vite's modulepreload polyfill, which
+  calls `fetch`, is disabled. The bundle does include pdf.js, whose general
+  design includes loading PDFs from web addresses; Doclyst only ever hands it
+  bytes already in memory, configures it to fetch nothing, and the page's
+  policy above would block it regardless. Tests drive the real page through a
+  batch and a signed-copy check and assert no request leaves it.
+- **It will not run inside another site's page.** A page that framed it could
+  lay its own controls over Doclyst's. GitHub Pages cannot send the header
+  that forbids framing, so the page checks for itself and refuses to start.
 - **Nothing is persisted.** No `localStorage`, no `sessionStorage`, no
   `indexedDB`, no cookies and no service worker. Asserted after a full batch.
   Closing the tab disposes of every record.

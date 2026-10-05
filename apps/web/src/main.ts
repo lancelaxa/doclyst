@@ -11,6 +11,7 @@ import {
   readCsvRecords,
   readSheetNames,
   readTemplateFields,
+  readLinkedContentWarnings,
   readUnsupportedForPdf,
   readXlsxRecords,
   runBatch,
@@ -29,6 +30,7 @@ import {
   type Template,
 } from '@doclyst/core';
 import { byId, clear, el, nextFrame, replaceChildren } from './dom.js';
+import { renderPages } from './render.js';
 import { downloadBytes } from './download.js';
 import {
   StreamingZipWriter,
@@ -60,6 +62,26 @@ import './app.css';
  * which makes it device-dependent, hence a warning rather than a refusal.
  */
 const LARGE_OUTPUT_WARNING_BYTES = 300 * 1024 * 1024;
+
+/**
+ * Refuse to run inside another page's frame.
+ *
+ * A page that frames this one could lay its own buttons over ours and trick
+ * someone into choosing files or saving output where it wants. The usual
+ * defence is a header forbidding framing, but GitHub Pages cannot send
+ * headers and a Content-Security-Policy in a meta tag cannot set
+ * `frame-ancestors`. So the page checks for itself, before anything else
+ * runs, and shows only a link to open it properly.
+ */
+if (window.top !== window.self) {
+  document.body.replaceChildren(
+    el('p', {
+      className: 'framed',
+      text: 'Doclyst has to be opened in its own browser tab, not inside another page.',
+    }),
+  );
+  throw new Error('Doclyst will not run inside a frame.');
+}
 
 interface LoadedTemplate {
   readonly template: Template;
@@ -416,6 +438,13 @@ function syncFormat(): void {
     );
     return;
   }
+  if (kind === 'docx' && outputFormat() === 'docx') {
+    try {
+      formatWarnings.append(...linkedNotice(readLinkedContentWarnings(loadedTemplate!.template)));
+    } catch {
+      // Reported properly when the batch runs.
+    }
+  }
   if (kind !== 'docx' || outputFormat() !== 'pdf') return;
 
   try {
@@ -562,6 +591,7 @@ function showStreamResult(
 
   nodes.push(
     ...unsupportedNotice(summary.unsupported),
+    ...linkedNotice(summary.linkedContent),
     ...shrunkNotice(summary.shrunkFields),
     ...sharedAddressNotice(summary.sharedAddresses),
     ...sendingHint(emailsWritten),
@@ -623,6 +653,7 @@ function showResults(result: BatchResult): void {
 
   nodes.push(
     ...unsupportedNotice(result.unsupported),
+    ...linkedNotice(result.linkedContent),
     ...shrunkNotice(result.shrunkFields),
     ...sharedAddressNotice(result.sharedAddresses),
     ...sendingHint(emails),
@@ -689,6 +720,20 @@ function showResults(result: BatchResult): void {
   }
 
   replaceChildren(results, ...nodes);
+}
+
+/**
+ * Warn about anything the template loads from outside itself — a picture
+ * inserted with "Link to File", say — which every recipient's Word would
+ * fetch on opening the letter.
+ */
+function linkedNotice(linked: readonly string[]): Node[] {
+  if (linked.length === 0) return [];
+  return [
+    warning(
+      `This template contains ${linked.join(' and ')}. Word fetches it every time a letter is opened, which tells whoever runs that address who opened it — and for anyone outside your network it shows as a broken picture. In the template, insert it normally instead (Insert → Pictures → This Device, not “Link to File”).`,
+    ),
+  ];
 }
 
 /** Name the PDF fields the template gave too little room. */
@@ -990,6 +1035,7 @@ async function runCheck(): Promise<void> {
     const read = async (files: readonly File[]) =>
       Promise.all(files.map(async (file) => ({ name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) })));
     const report = await checkReturnedLetters(await read(sentFiles), await read(returnedFiles), {
+      renderer: renderPages,
       onProgress: async (completed, total) => {
         if (completed % 5 === 0) {
           replaceChildren(checkResults, el('p', { className: 'fields', text: `Reading ${completed} of ${total}…` }));

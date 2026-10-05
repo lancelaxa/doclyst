@@ -9,6 +9,7 @@ import {
   readCsvRecords,
   readSheetNames,
   preparePdfTemplate,
+  readLinkedContentWarnings,
   readTemplateFields,
   readXlsxRecords,
   runBatch,
@@ -54,6 +55,8 @@ export async function inspectCommand(args: ParsedArgs, ctx: CommandContext): Pro
     const template = await loadTemplate(templatePath);
     templateFields = await readTemplateFields(template);
     ctx.log(`Template: ${basename(templatePath)} (${template.kind})`);
+    const linked = readLinkedContentWarnings(template);
+    if (linked.length > 0) ctx.log(`  Warning: ${linkedContentMessage(linked)}`);
     ctx.log(
       templateFields.length > 0
         ? `  Fields (${templateFields.length}): ${templateFields.join(', ')}`
@@ -282,6 +285,10 @@ export async function fillCommand(args: ParsedArgs, ctx: CommandContext): Promis
     );
   }
 
+  if (result.linkedContent.length > 0) {
+    ctx.error(`Warning: ${linkedContentMessage(result.linkedContent)}`);
+  }
+
   if (dryRun) {
     ctx.log(
       `Dry run: ${result.documents.length} document(s) would be written, ${result.failures.length} row(s) would fail.`,
@@ -464,4 +471,9 @@ function parseOutputFormat(value: string | undefined): OutputFormat | undefined 
 
 function normalize(key: string): string {
   return key.trim().replace(/[\s.\-]+/g, '_').toUpperCase();
+}
+
+/** Plain-language warning about content a template loads from outside itself. */
+export function linkedContentMessage(linked: readonly string[]): string {
+  return `this template contains ${linked.join(' and ')}. Word fetches it each time a generated document is opened, which tells whoever runs that address who opened it, and fails for anyone outside your network. Insert it into the template normally instead (in Word: Insert > Pictures > This Device, not "Link to File").`;
 }
