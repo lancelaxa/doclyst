@@ -145,6 +145,15 @@ export {
 } from './output/email.js';
 
 export {
+  buildDocuSealSheet,
+  findSignatureTags,
+  readDocuSealTemplate,
+  type DocuSealSheet,
+  type DocuSealSheetOptions,
+  type DocuSealTemplateInfo,
+} from './output/docuseal.js';
+
+export {
   describeValue,
   redactRecord,
   redactForLog,

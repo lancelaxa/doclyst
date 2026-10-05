@@ -10,6 +10,7 @@ generate one document per person. Nothing to install, and no programming.
 - [Step 3 — Generate the documents](#step-3--generate-the-documents)
 - [Step 4 — Send the letters for signing](#step-4--send-the-letters-for-signing)
 - [Step 5 — Check the signed copies](#step-5--check-the-signed-copies)
+- [Signing online with DocuSeal (pilot)](#signing-online-with-docuseal-pilot)
 - [Working with PDF templates](#working-with-pdf-templates)
 - [Getting PDFs from a Word template](#getting-pdfs-from-a-word-template)
 - [Naming the output files](#naming-the-output-files)
@@ -358,6 +359,131 @@ what the text says. Open the letter to see it.
   sentence somewhere else is worth a look.
 - **It does not chase, remind or track.** It checks what you give it, when you
   give it.
+
+---
+
+## Signing online with DocuSeal (pilot)
+
+Steps 4 and 5 send each letter as an email attachment and check the signed
+copies that come back. **DocuSeal** replaces both: you upload your template to
+DocuSeal once, then a spreadsheet for each batch, and each candidate gets a
+link to read and sign their own letter in their browser. There are no
+attachments in either direction, and you can see who has signed in one place.
+
+This is being piloted. **No payment is needed to prepare or to test it.**
+DocuSeal's free plan sends up to 10 requests a month, one at a time, which is
+enough to prove the whole thing works. Bulk sending, which is what 100 letters
+a month needs, is on the paid Pro plan (about US$20 a month per user).
+
+### How the work divides
+
+| | Done in |
+|---|---|
+| Writing the letter, with its tags | Word |
+| Checking the batch and making the upload spreadsheet | Doclyst |
+| Filling each letter, sending the links, collecting signatures | DocuSeal |
+| Keeping the signed letters | SharePoint |
+
+Doclyst never connects to DocuSeal. You upload the files yourself, so you
+always see exactly what leaves your machine.
+
+### Preparing the template
+
+Write the letter in Word as usual, with two kinds of tag:
+
+- **Values you fill in** use the ordinary placeholder: `{{FULL_NAME}}`,
+  `{{BASIC_SALARY}}`. DocuSeal locks these, so the candidate sees them but
+  cannot change them.
+- **Things the candidate does** use DocuSeal's longer form, with a type:
+  - `{{Signature;type=signature}}` where they sign;
+  - `{{Date signed;type=datenow}}` for the date, filled in automatically
+    when they sign.
+
+Then **save it as PDF** and upload *the PDF* to DocuSeal as a new template.
+The PDF keeps your letterhead exactly; DocuSeal's own conversion of a Word
+file might not.
+
+> In DocuSeal, a box is the size of the tag that made it, much as with
+> Doclyst's own PDF templates. If a long value looks squeezed in the pilot,
+> give that tag more room — its own line, or a longer field name.
+
+### The free pilot
+
+Do this once, with made-up candidates only.
+
+1. **Choose the EU service.** Sign up at `docuseal.eu`, not `docuseal.com`.
+   The EU service stores everything in Ireland; the other stores it in the
+   United States. See the checklist below.
+2. **Upload the tagged PDF** as a template. Check that every tag has become a
+   box in the right place and that the tag text itself no longer shows.
+3. **Make a test spreadsheet** with two made-up candidates using your own and
+   a colleague's email address, then use **Sign online with DocuSeal** in
+   Doclyst to make the upload file.
+4. **Send each one from DocuSeal**, entering the values by hand (the free
+   plan sends one at a time). Open the link from the email, check the letter
+   reads right and the values cannot be edited, sign it, and download the
+   signed copy and its audit log.
+5. **Note anything that looks wrong** — a squeezed value, a box out of place,
+   tag text still showing — and fix it in the Word file before going further.
+
+### Each batch, once on the paid plan
+
+1. Load the template and spreadsheet in Doclyst, as for any batch, and read
+   the green lines.
+2. In **Sign online with DocuSeal**, check the name and email columns and
+   press **Make spreadsheet for DocuSeal**. It tells you:
+   - which rows it left out and why — a blank value, or a bad address;
+   - which columns it left out because the letter does not use them;
+   - anything to check on DocuSeal's column-matching screen.
+3. **Download the spreadsheet** and upload it to DocuSeal *as it is*. Opening
+   it in Excel first can change values — dates and amounts especially.
+4. On DocuSeal's **column-matching screen**, check each field is matched to
+   the column of the same name, then send.
+5. As letters are signed, **download them with their audit logs into the
+   offers folder in SharePoint**, then delete them from DocuSeal (see below).
+
+Step 5 of Doclyst is not needed for letters signed in DocuSeal: the candidate
+signs the letter DocuSeal made, and cannot edit it.
+
+### Why Doclyst makes the spreadsheet
+
+You could upload your full spreadsheet to DocuSeal directly. Doclyst's version
+is safer in three ways:
+
+- **Only what the letter uses goes.** NRIC numbers, bank details and notes
+  stay on your machine.
+- **Columns match the right fields.** DocuSeal matches a field to the first
+  column whose name *contains* the field's name, so a field called `Name`
+  would pick up a "Manager Name" column placed before "Full Name" and put the
+  manager's name on the letter. Doclyst's spreadsheet uses the exact field
+  names in an order that matches cleanly.
+- **Nothing goes out blank.** DocuSeal locks every value it imports, so a
+  blank salary would be a blank, locked salary; and a field with no column at
+  all would be left for the *candidate* to fill in. Doclyst holds back the row,
+  or the whole batch, instead.
+
+### Before paying: what to confirm with DocuSeal
+
+DocuSeal's website could not be checked from where this guide was written, so
+confirm each of these yourself, and keep the answers with the decision:
+
+- [ ] **Where data is stored.** The EU service (`docuseal.eu`) is reported to
+      be hosted in Ireland, the global one (`docuseal.com`) in the United
+      States. Neither is in Singapore, so this is a transfer of personal data
+      overseas — see the next point.
+- [ ] **A data processing agreement**, setting out how DocuSeal protects the
+      data. Under the PDPA, personal data sent outside Singapore must stay
+      protected to a comparable standard, and a written agreement is the
+      usual way to show it. Ask whoever handles data protection in your
+      company to review it; this guide is not legal advice.
+- [ ] **How to delete completed letters**, and whether that can be automatic.
+      Keep signed letters in SharePoint, not in DocuSeal.
+- [ ] **Two-factor sign-in** for every HR account, and who in the company can
+      see which templates and submissions.
+- [ ] **The audit log** — that it records who signed, when, and from which
+      email address, and that it can be downloaded with each letter.
+- [ ] **Price and limits** on the plan you would buy — the number of users,
+      and whether bulk sending is included.
 
 ---
 

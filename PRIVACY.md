@@ -273,6 +273,32 @@ and the message goes out from whichever account opens it. Once sent, an email
 and its attachment are in your organisation's email system, and its rules
 apply.
 
+## Preparing for DocuSeal
+
+Doclyst can make the spreadsheet for signing letters online in DocuSeal. Making
+it happens in the tab like everything else; **uploading it to DocuSeal is a
+transfer of personal data to a third party**, done by the person who uploads
+it, and from then on DocuSeal's own terms and controls apply.
+
+Doclyst keeps that transfer as small and as correct as it can:
+
+- **Only the fields the letter uses**, plus each candidate's name and email
+  address, are written. Every other column — NRIC, bank details, notes —
+  stays out, and the page lists what was left out.
+- **No blank values and no unmatched fields.** DocuSeal locks imported values,
+  so a blank would be a blank, locked salary, and a field with no column would
+  be filled in by the candidate. Such rows, or the whole batch, are held back.
+- **Columns cannot be matched to the wrong field.** DocuSeal matches by
+  substring; the headers are the exact field names, in an order that matches
+  cleanly, and any names that could still be confused are reported.
+- **Addresses are checked** exactly as for email drafts.
+
+DocuSeal is reported to host its EU service in Ireland and its global service
+in the United States. Either way the data leaves Singapore, so the PDPA's
+obligations on overseas transfers apply; a data processing agreement with
+DocuSeal is the usual way to meet them. That is for the organisation to
+arrange and review. The guide lists what to confirm before paying.
+
 ## Checking signed copies
 
 The check runs entirely in the tab. Letters sent and copies returned are read
