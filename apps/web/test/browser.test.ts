@@ -1018,7 +1018,7 @@ Priya Nair,6100,priya.nair@example.com
     it('picks the email column and confirms the addresses before anything is made', async () => {
       const { page } = await openPage();
       await loadWithEmails(page);
-      expect(await page.inputValue('#email-column')).toBe('Email');
+      await expect.poll(() => page.inputValue('#email-column')).toBe('Email');
       await expect.poll(() => page.textContent('#email-check')).toContain('All 3 addresses look right');
       await page.close();
     });
@@ -1082,6 +1082,59 @@ Priya Nair,6100,AISHA.RAHMAN@example.com
       expect(Buffer.from((attached ?? '').replace(/\s+/g, ''), 'base64').equals(Buffer.from(files['document-0002.docx'] as Uint8Array))).toBe(true);
 
       expect(offOriginRequests(requests)).toEqual([]);
+      await page.close();
+    });
+  });
+
+  describe('preparing for DocuSeal', () => {
+    const SOURCE = `Full Name,Email,Basic Salary,NRIC,Manager Name
+Aisha Rahman,aisha.rahman@example.com,"4,500",S0000001A,Daniel Tan
+Wei Lun Tan,weilun@example.com,,S0000002B,Daniel Tan
+`;
+
+    async function load(page: Page, placeholders: string[]): Promise<void> {
+      await page.setInputFiles('#template-input', {
+        name: 'offer.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        buffer: Buffer.from(makeTemplate(placeholders)),
+      });
+      await page.setInputFiles('#data-input', { name: 'staff.csv', mimeType: 'text/csv', buffer: Buffer.from(SOURCE) });
+    }
+
+    it('makes an upload spreadsheet with only what the letter uses', async () => {
+      const { page, requests } = await openPage();
+      await load(page, ['FULL_NAME', 'BASIC_SALARY', 'Sign here;type=signature']);
+      // The spreadsheet is read asynchronously; wait for the columns to land.
+      await expect.poll(() => page.inputValue('#docuseal-name')).toBe('Full Name');
+      await expect.poll(() => page.inputValue('#docuseal-email')).toBe('Email');
+
+      await page.click('#make-docuseal');
+      await expect.poll(() => page.textContent('#docuseal-results')).toContain('1 candidate ready for DocuSeal, 1 row(s) left out');
+      const said = (await page.textContent('#docuseal-results')) ?? '';
+      expect(said).toContain('DocuSeal will fill in: FULL_NAME, BASIC_SALARY.');
+      expect(said).toContain('Not included, because the letter does not use them: NRIC, Manager Name.');
+      expect(said).not.toContain('nowhere to sign');
+      expect(said).not.toContain('S0000');
+
+      const download = page.waitForEvent('download');
+      await page.getByRole('button', { name: 'Download spreadsheet for DocuSeal' }).click();
+      const file = await download;
+      expect(file.suggestedFilename()).toBe('docuseal-upload.csv');
+      const chunks: Buffer[] = [];
+      for await (const chunk of await file.createReadStream()) chunks.push(chunk as Buffer);
+      expect(Buffer.concat(chunks).toString('utf8')).toBe(
+        '"Name","Email","FULL_NAME","BASIC_SALARY"\r\n"Aisha Rahman","aisha.rahman@example.com","Aisha Rahman","4,500"\r\n',
+      );
+      expect(offOriginRequests(requests)).toEqual([]);
+      await page.close();
+    });
+
+    it('says when the template has nowhere to sign', async () => {
+      const { page } = await openPage();
+      await load(page, ['FULL_NAME']);
+      await expect.poll(() => page.isDisabled('#make-docuseal')).toBe(false);
+      await page.click('#make-docuseal');
+      await expect.poll(() => page.textContent('#docuseal-results')).toContain('This template has nowhere to sign.');
       await page.close();
     });
   });

@@ -788,3 +788,12 @@ details.not-returned summary {
   cursor: pointer;
   font-weight: 550;
 }
+
+/* --- DocuSeal ---------------------------------------------------------- */
+
+/* "or" rather than a number: this card replaces step 4, it does not follow it. */
+.step-num.step-or {
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}

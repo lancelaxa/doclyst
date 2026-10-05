@@ -305,6 +305,38 @@ Thank you.</textarea>
           <div id="results" class="results" role="status" aria-live="polite"></div>
         </section>
 
+        <section class="card" aria-labelledby="step-docuseal">
+          <header class="card-head">
+            <span class="step-num step-or" aria-hidden="true">or</span>
+            <div>
+              <h2 id="step-docuseal">Sign online with DocuSeal</h2>
+              <p class="hint">
+                Instead of making the letters here: upload your template to DocuSeal
+                once, then upload the spreadsheet this makes for each batch. Each
+                candidate gets a link and signs their letter in DocuSeal, with no
+                attachments. Only the columns your letter uses are included.
+              </p>
+            </div>
+          </header>
+
+          <div class="field-row">
+            <label for="docuseal-name">Name column</label>
+            <select id="docuseal-name"></select>
+          </div>
+          <div class="field-row">
+            <label for="docuseal-email">Email column</label>
+            <select id="docuseal-email"></select>
+          </div>
+
+          <div class="actions">
+            <button type="button" id="make-docuseal" class="btn" disabled>
+              Make spreadsheet for DocuSeal
+            </button>
+          </div>
+
+          <div id="docuseal-results" class="results" role="status" aria-live="polite"></div>
+        </section>
+
         <section class="card" aria-labelledby="step-check">
           <header class="card-head">
             <span class="step-num" aria-hidden="true">5</span>

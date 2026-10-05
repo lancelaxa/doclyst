@@ -60,6 +60,9 @@ keeps working if the link above ever goes away.
   open in Outlook and send. Doclyst never sends anything itself, and it checks
   every address first — including for the pasted-in line break that would
   quietly copy someone else in.
+- **Ready for online signing.** For signing in DocuSeal instead of by
+  attachment, it makes the upload spreadsheet: only the columns the letter
+  uses, named so they match the right fields, with no blank values.
 - **Checks signed copies.** Drop in the letters you sent and the signed copies
   that came back. It matches them up, even if renamed, and tells you which are
   signed, which are not, and which say something different from what you sent.

@@ -1,5 +1,6 @@
 import {
   DoclystError,
+  buildDocuSealSheet,
   buildZip,
   checkEmailAddress,
   checkFilenameTemplate,
@@ -11,6 +12,7 @@ import {
   readCsvRecords,
   readSheetNames,
   readTemplateFields,
+  readDocuSealTemplate,
   readLinkedContentWarnings,
   readUnsupportedForPdf,
   readXlsxRecords,
@@ -128,6 +130,10 @@ const returnedDrop = byId<HTMLLabelElement>('returned-drop');
 const returnedInput = byId<HTMLInputElement>('returned-input');
 const checkButton = byId<HTMLButtonElement>('check-returned');
 const checkResults = byId<HTMLDivElement>('check-results');
+const docusealName = byId<HTMLSelectElement>('docuseal-name');
+const docusealEmail = byId<HTMLSelectElement>('docuseal-email');
+const makeDocuseal = byId<HTMLButtonElement>('make-docuseal');
+const docusealResults = byId<HTMLDivElement>('docuseal-results');
 const generateButton = byId<HTMLButtonElement>('generate');
 const saveFolderButton = byId<HTMLButtonElement>('save-folder');
 const saveZipButton = byId<HTMLButtonElement>('save-zip');
@@ -384,6 +390,7 @@ function describeData(): void {
     ...unmatchedNotice(),
   );
   populateEmailColumns();
+  populateDocuSealColumns();
   refresh();
 }
 
@@ -763,6 +770,8 @@ function updateProgress(completed: number, total: number): void {
 }
 
 function setBusy(busy: boolean): void {
+  makeDocuseal.disabled =
+    busy || loadedTemplate === undefined || (loadedData?.records.length ?? 0) === 0 || !docusealName.value || !docusealEmail.value;
   generateButton.disabled = busy || !ready();
   saveFolderButton.disabled = busy || !ready();
   saveZipButton.disabled = busy || !ready();
@@ -959,6 +968,97 @@ function listRows(rows: readonly number[]): string {
   if (shown.length === 1) return shown[0] as string;
   return `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`;
 }
+
+// --- DocuSeal ------------------------------------------------------------
+
+/**
+ * Offer the data's columns for DocuSeal's name and email, picking the likely
+ * ones and keeping a choice already made.
+ */
+function populateDocuSealColumns(): void {
+  const fields = loadedData?.fields ?? [];
+  const fill = (select: HTMLSelectElement, guess: (field: string) => boolean): void => {
+    const previous = select.value;
+    clear(select);
+    select.append(el('option', { text: 'Choose a column', attrs: { value: '' } }));
+    for (const field of fields) select.append(el('option', { text: field, attrs: { value: field } }));
+    select.value = fields.includes(previous) ? previous : (fields.find(guess) ?? '');
+  };
+  fill(docusealName, (field) => /^(full\s*name|name|candidate\s*name|employee\s*name)$/i.test(field.trim()));
+  fill(docusealEmail, (field) => /e-?mail/i.test(field));
+  clear(docusealResults);
+}
+
+docusealName.addEventListener('change', () => setBusy(false));
+docusealEmail.addEventListener('change', () => setBusy(false));
+
+makeDocuseal.addEventListener('click', () => {
+  void withStatus(docusealResults, async () => {
+    if (!loadedTemplate || !loadedData) return;
+    const info = await readDocuSealTemplate(loadedTemplate.template);
+    const sheet = buildDocuSealSheet(loadedData.records, {
+      fields: info.fields,
+      nameColumn: docusealName.value,
+      emailColumn: docusealEmail.value,
+    });
+
+    const nodes: Node[] = [
+      el('p', {
+        className: sheet.failures.length > 0 ? 'partial' : 'ok',
+        text:
+          `${sheet.included} candidate${sheet.included === 1 ? '' : 's'} ready for DocuSeal` +
+          (sheet.failures.length > 0 ? `, ${sheet.failures.length} row(s) left out` : ''),
+      }),
+    ];
+
+    if (info.signatureTags === undefined) {
+      nodes.push(
+        el('p', {
+          className: 'fields',
+          text: 'Make sure the template you upload to DocuSeal has a signature tag, such as {{Signature;type=signature}}, where the candidate signs.',
+        }),
+      );
+    } else if (info.signatureTags.length === 0) {
+      nodes.push(
+        warning(
+          'This template has nowhere to sign. Add {{Signature;type=signature}} where the candidate signs, and {{Date signed;type=datenow}} for the date, then save it as PDF again.',
+        ),
+      );
+    }
+
+    const used = new Set([docusealName.value, docusealEmail.value].map(normalizeKey));
+    for (const field of info.fields) used.add(normalizeKey(field));
+    const leftOut = loadedData.fields.filter((field) => !used.has(normalizeKey(field)));
+    nodes.push(
+      el('p', { className: 'fields', text: `DocuSeal will fill in: ${info.fields.filter((f) => !sheet.signerFields.includes(f)).join(', ') || 'nothing'}.` }),
+    );
+    if (leftOut.length > 0) {
+      nodes.push(el('p', { className: 'fields', text: `Not included, because the letter does not use them: ${leftOut.join(', ')}.` }));
+    }
+
+    nodes.push(...sheet.notes.map((note) => warning(note)), ...sharedAddressNotice(sheet.sharedAddresses));
+
+    if (sheet.included > 0) {
+      const download = el('button', { className: 'btn btn-primary', text: 'Download spreadsheet for DocuSeal' });
+      download.addEventListener('click', () => downloadBytes(new TextEncoder().encode(sheet.csv), 'docuseal-upload.csv'));
+      nodes.push(
+        download,
+        el('p', {
+          className: 'fields',
+          text: 'In DocuSeal, open the template, choose Send, then upload this file. Upload it as it is: opening it in Excel first can change the values.',
+        }),
+      );
+    }
+
+    if (sheet.failures.length > 0) {
+      const list = el('ul', { className: 'failure-list' });
+      for (const failure of sheet.failures) list.append(el('li', { text: `Row ${failure.row}: ${failure.message}` }));
+      nodes.push(el('h3', { text: 'Rows left out' }), list);
+    }
+
+    replaceChildren(docusealResults, ...nodes);
+  });
+});
 
 // --- checking signed letters -------------------------------------------
 

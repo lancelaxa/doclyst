@@ -11,6 +11,8 @@ const MIME_TYPES: Readonly<Record<string, string>> = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   pdf: 'application/pdf',
   zip: 'application/zip',
+  csv: 'text/csv',
+  eml: 'message/rfc822',
 };
 
 function mimeTypeFor(filename: string): string {
